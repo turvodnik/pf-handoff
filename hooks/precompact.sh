@@ -15,7 +15,7 @@ run() {
 
   local row session_id trigger cwd_in
   if [ "$has_jq" = 1 ]; then
-    row=$(printf '%s' "$input" | jq -r '[(.session_id // ""), (.trigger // ""), (.cwd // "")] | @tsv' 2>/dev/null)
+    row=$(printf '%s' "$input" | jq -r '[(.session_id // ""), (.trigger // ""), (.cwd // "")] | join("\u001f")' 2>/dev/null)
   else
     row=$(printf '%s' "$input" | python3 -c '
 import json, sys
@@ -23,10 +23,10 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
-print("\t".join([str(d.get("session_id") or ""), str(d.get("trigger") or ""), str(d.get("cwd") or "")]))
+print("\x1f".join([str(d.get("session_id") or ""), str(d.get("trigger") or ""), str(d.get("cwd") or "")]))
 ' 2>/dev/null)
   fi
-  IFS=$'\t' read -r session_id trigger cwd_in <<< "$row"
+  IFS=$'\x1f' read -r session_id trigger cwd_in <<< "$row"
 
   local ts log_dir
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)

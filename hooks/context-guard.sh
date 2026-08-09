@@ -4,9 +4,9 @@
 # Контракт: НИКОГДА не падать и не блокировать сессию (see statusline.sh header).
 set -u
 
-THRESH_60='[Контекст: занято %s%%, свободно ~%sk токенов. §13: сделай чекпоинт HANDOFF; новые крупные куски — субагентам или в новую сессию.]'
-THRESH_80='[Контекст: занято %s%%, свободно ~%sk токенов. §13: новых M/L-кусков не начинать; доведи текущий до проверяемой точки и обнови HANDOFF.]'
-THRESH_90='[Контекст: занято %s%%. §13: немедленно полный pf-handoff (сверка → перезапись → журнал → статусы). Автокомпакт близок — HANDOFF должен быть свежим.]'
+THRESH_Z1='[Контекст: занято %s%%, свободно ~%sk токенов. §13: сделай чекпоинт HANDOFF; новые крупные куски — субагентам или в новую сессию.]'
+THRESH_Z2='[Контекст: занято %s%%, свободно ~%sk токенов. §13: новых M/L-кусков не начинать; доведи текущий до проверяемой точки и обнови HANDOFF.]'
+THRESH_Z3='[Контекст: занято %s%%. §13: немедленно полный pf-handoff (сверка → перезапись → журнал → статусы). Автокомпакт близок — HANDOFF должен быть свежим.]'
 
 run() {
   local input
@@ -16,9 +16,12 @@ run() {
   local has_jq=0
   command -v jq >/dev/null 2>&1 && has_jq=1
 
-  local row session_id event transcript_path
+  local row session_id event transcript_path agent_id cwd_in
   if [ "$has_jq" = 1 ]; then
-    row=$(printf '%s' "$input" | jq -r '[(.session_id // ""), (.hook_event_name // ""), (.transcript_path // "")] | @tsv' 2>/dev/null)
+    # Разделитель U+001F (unit separator), НЕ таб: таб для bash-read — «IFS-пробел»,
+    # последовательные табы схлопываются, и пустые поля (например, отсутствующий
+    # agent_id) сдвигали бы соседние значения на их место.
+    row=$(printf '%s' "$input" | jq -r '[(.session_id // ""), (.hook_event_name // ""), (.transcript_path // ""), (.agent_id // ""), (.cwd // "")] | join("\u001f")' 2>/dev/null)
   else
     row=$(printf '%s' "$input" | python3 -c '
 import json, sys
@@ -26,12 +29,58 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
-print("\t".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") or ""), str(d.get("transcript_path") or "")]))
+print("\x1f".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") or ""), str(d.get("transcript_path") or ""), str(d.get("agent_id") or ""), str(d.get("cwd") or "")]))
 ' 2>/dev/null)
   fi
-  IFS=$'\t' read -r session_id event transcript_path <<< "$row"
+  IFS=$'\x1f' read -r session_id event transcript_path agent_id cwd_in <<< "$row"
   [ -z "$session_id" ] && return 0
   [ -z "$event" ] && event="UserPromptSubmit"
+
+  # Субагентский вызов (во входе есть agent_id): процент РОДИТЕЛЯ для субагента —
+  # дезинформация (у него своё, отдельное окно), а расход родительского
+  # `announced` прятал бы предупреждение от самого родителя. Поэтому: считаем
+  # собственное окно субагента по его транскрипту (путь вычислим по шаблону
+  # <каталог>/<session_id>/subagents/agent-<agent_id>.jsonl) и ведём отдельный
+  # state-ключ agent-<id>.json. Родительское состояние не читаем и не пишем.
+  # Оговорка: окно для fallback берётся по модели из settings.json — если
+  # субагент на другой модели (например haiku, 200k), оценка приблизительная.
+  if [ -n "$agent_id" ]; then
+    local sub_tp
+    sub_tp="$(dirname "$transcript_path")/$session_id/subagents/agent-$agent_id.jsonl"
+    [ -r "$sub_tp" ] || return 0
+    transcript_path="$sub_tp"
+    session_id="agent-$agent_id"
+  fi
+
+  # Пороги зон: по умолчанию 60/80/90, проект может переопределить файлом
+  # <cwd>/.agents/context-budget.json вида {"thresholds": [50, 70, 85]}
+  # (ровно три целых 1–99 по возрастанию; иначе — молча дефолт).
+  local t1=60 t2=80 t3=90
+  local cfg="$cwd_in/.agents/context-budget.json"
+  if [ -n "$cwd_in" ] && [ -r "$cfg" ]; then
+    local trow=""
+    if [ "$has_jq" = 1 ]; then
+      trow=$(jq -r 'if (.thresholds|type)=="array" and (.thresholds|length)==3 then (.thresholds|map(tostring)|join("\t")) else "" end' "$cfg" 2>/dev/null)
+    else
+      trow=$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    t = d.get("thresholds")
+    assert isinstance(t, list) and len(t) == 3
+    print("\t".join(str(int(x)) for x in t))
+except Exception:
+    print("")
+' "$cfg" 2>/dev/null)
+    fi
+    if [ -n "$trow" ]; then
+      local c1 c2 c3
+      IFS=$'\t' read -r c1 c2 c3 <<< "$trow"
+      if [ "$c1" -ge 1 ] 2>/dev/null && [ "$c1" -lt "$c2" ] 2>/dev/null && [ "$c2" -lt "$c3" ] 2>/dev/null && [ "$c3" -le 99 ] 2>/dev/null; then
+        t1="$c1"; t2="$c2"; t3="$c3"
+      fi
+    fi
+  fi
 
   local state_dir state_file
   state_dir="$HOME/.claude/context-state"
@@ -134,10 +183,10 @@ print(d.get("model") or "")
 
   [ -z "${pct:-}" ] && return 0
 
-  local new_announced=0
-  if [ "$pct" -ge 90 ] 2>/dev/null; then new_announced=90
-  elif [ "$pct" -ge 80 ] 2>/dev/null; then new_announced=80
-  elif [ "$pct" -ge 60 ] 2>/dev/null; then new_announced=60
+  local new_announced=0 zone=0
+  if [ "$pct" -ge "$t3" ] 2>/dev/null; then new_announced=$t3; zone=3
+  elif [ "$pct" -ge "$t2" ] 2>/dev/null; then new_announced=$t2; zone=2
+  elif [ "$pct" -ge "$t1" ] 2>/dev/null; then new_announced=$t1; zone=1
   fi
 
   if [ "$new_announced" -gt 0 ] 2>/dev/null && [ "$new_announced" -gt "${announced:-0}" ] 2>/dev/null; then
@@ -145,14 +194,14 @@ print(d.get("model") or "")
     free_tokens=$(( window - used_tokens ))
     [ "$free_tokens" -lt 0 ] && free_tokens=0
     xk=$(( free_tokens / 1000 ))
-    case "$new_announced" in
-      60) msg=$(printf "$THRESH_60" "$pct" "$xk") ;;
-      80) msg=$(printf "$THRESH_80" "$pct" "$xk") ;;
-      90) msg=$(printf "$THRESH_90" "$pct") ;;
+    case "$zone" in
+      1) msg=$(printf "$THRESH_Z1" "$pct" "$xk") ;;
+      2) msg=$(printf "$THRESH_Z2" "$pct" "$xk") ;;
+      3) msg=$(printf "$THRESH_Z3" "$pct") ;;
     esac
     emit_json "$event" "$msg" "$has_jq"
     write_state "$state_dir" "$state_file" "$has_jq" "$fallback_used" "$new_announced" "$pct" "$window" "$used_tokens" "$s_pct" "$s_window" "$s_tokens" "$s_updated"
-  elif [ "$pct" -lt 60 ] 2>/dev/null && [ "${announced:-0}" != 0 ]; then
+  elif [ "$pct" -lt "$t1" ] 2>/dev/null && [ "${announced:-0}" != 0 ]; then
     write_state "$state_dir" "$state_file" "$has_jq" "$fallback_used" 0 "$pct" "$window" "$used_tokens" "$s_pct" "$s_window" "$s_tokens" "$s_updated"
   fi
   return 0

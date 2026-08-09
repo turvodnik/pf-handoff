@@ -38,7 +38,7 @@ run() {
         (if (.context_window|type) == "object" then (.context_window.context_window_size // "null") else "null" end),
         (if (.context_window|type) == "object" then (.context_window.total_input_tokens // "null") else "null" end),
         (.model.display_name // "")
-      ] | @tsv
+      ] | map(tostring) | join("\u001f")
     ' 2>/dev/null)
   else
     row=$(printf '%s' "$input" | python3 -c '
@@ -59,11 +59,11 @@ row = [
     str(g(cw.get("total_input_tokens"))),
     str((d.get("model") or {}).get("display_name") or ""),
 ]
-print("\t".join(row))
+print("\x1f".join(row))
 ' 2>/dev/null)
   fi
 
-  IFS=$'\t' read -r session_id pct_raw window_raw tokens_raw model_name <<< "$row"
+  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name <<< "$row"
 
   # context_window отсутствует/null (или в нём нет used_percentage/размера) —
   # печатаем только модель, состояние сессии не пишем (пороги считать не от чего).

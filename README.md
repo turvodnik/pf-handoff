@@ -1,82 +1,96 @@
-# pf-handoff — бюджет контекста и непрерывность сессий для Claude Code
+# pf-handoff — context budget & session continuity for Claude Code
 
-Набор из правил, двух скиллов и четырёх хуков, который решает главную боль длинных сессий: **контекстное окно кончается, автокомпакт срабатывает как лотерея, агент забывает, что делал**. С pf-handoff агент заранее видит заполнение окна, сам ведёт «шпаргалку состояния» и переживает сжатие истории или смену чата так, будто ничего не случилось.
+*Documentation: English (this file) · [Русская версия](README.ru.md)*
 
-## Проблема, которую это решает
+A small kit — rules, two skills, and four hooks — that fixes the core pain of long agent sessions: **the context window fills up, auto-compaction fires like a lottery, and the agent forgets what it was doing**. With pf-handoff the agent sees window usage ahead of time, keeps a "state cheat-sheet" on disk, and survives history compaction or a chat switch as if nothing happened.
 
-- **Контекстное окно** — рабочая память одного чата (200 тыс. или 1 млн токенов). Кончилась — Claude Code сжимает историю в короткий конспект (**компакт**), и после сжатия агент может забыть решения и состояние задачи.
-- Ключевой факт: **модель не видит собственный расход окна**. Она физически не может «заранее понять, что задача не влезет» — ей никто не сообщает процент. Статус-строка (statusline) Claude Code эти данные получает, а модель — нет.
-- pf-handoff строит мост: датчик → пороги → напоминания модели → шпаргалка на диске → автоподхват после сжатия.
+## The problem it solves
 
-## Как это работает (4 части)
+- The **context window** is the working memory of one chat (200k or 1M tokens). When it runs out, Claude Code compresses the history into a short summary (**compact**) — and after compression the agent may lose decisions and task state.
+- Key fact: **the model cannot see its own window usage.** It physically cannot "realize in advance that a task won't fit" — nobody tells it the percentage. The Claude Code statusline receives that data; the model does not.
+- pf-handoff builds the bridge: sensor → thresholds → reminders to the model → cheat-sheet on disk → automatic pickup after compaction.
 
-1. **Правила** (`docs/rules-section.md` — готовый раздел для вашего CLAUDE.md/AGENTS.md): три слоя памяти, пороги 60/80/90% окна, правило «одна задача = один HANDOFF-файл», инструкция компактору (что сохранять при сжатии), памятка «когда что нажимать».
-2. **HANDOFF-файл** — живая шпаргалка состояния задачи в `<проект>/.agents/runtime/handoff/YYYY-MM-DD-<slug>.md`: Цель / Состояние (доказанное) / Следующий шаг / Блокеры / Ключевые файлы и решения / Не делать. Перезаписывается целиком, ≤120 строк, в .gitignore.
-3. **Скиллы**:
-   - `pf-handoff` — чекпоинт или закрытие сессии: сверка доказанного → перезапись шпаргалки → статусы/журнал.
-   - `pf-resume` — подхват в новом чате или после `/clear`: читает шпаргалку и продолжает, «как будто чат тот же».
-4. **Хуки** (скрипты, которые Claude Code запускает сам; каталог `hooks/`):
-   - `statusline.sh` — печатает «⛽ 62% · 620k/1M · Opus» в статус-строке и пишет процент в state-файл (датчик).
-   - `context-guard.sh` — на порогах 60/80/90% вбрасывает модели короткую директиву («сделай чекпоинт», «новых крупных кусков не начинать», «немедленно полный handoff»). Вне порогов молчит. Если state-файла нет — сам считает процент из транскрипта сессии (fallback).
-   - `sessionstart.sh` — после **авто**компакта немедленно говорит агенту «вот твоя шпаргалка, перенеси в неё свежие изменения из сводки и продолжай»; после **ручного** `/compact` — только подсказка «/pf-resume <slug>», ничего не грузит (вы сами решаете, продолжать ли старое); на старте/резюме — напоминает про активные шпаргалки. Заодно чистит state-файлы старше 14 суток.
-   - `precompact.sh` — логирует каждый компакт (ручной/авто) в `~/.claude/context-state/compacts.log`.
+## How it works (4 parts)
 
-Цена всей обвязки — **≈180 токенов на сессию в худшем случае** (все вбросы короткие и срабатывают по одному разу на порог).
+1. **Rules** (`docs/rules-section.md` — a ready-made section for your CLAUDE.md/AGENTS.md): three memory layers, window thresholds (60/80/90% by default), "one task = one HANDOFF file", compactor instructions (what to preserve during compression), and a "what to press when" cheat sheet.
+2. **HANDOFF file** — a living task-state cheat-sheet in `<project>/.agents/runtime/handoff/YYYY-MM-DD-<slug>.md`: Goal / State (proven) / Next step / Blockers / Key files & decisions / Do-not-do. Always rewritten as a whole, ≤120 lines, git-ignored.
+3. **Skills**:
+   - `pf-handoff` — checkpoint or session close: verify what's proven → rewrite the cheat-sheet → statuses/journal.
+   - `pf-resume` — pickup in a new chat or after `/clear`: reads the cheat-sheet and continues "as if it were the same chat". Reopens a closed file by slug; auto-closes cheat-sheets of already-finished tasks.
+4. **Hooks** (scripts Claude Code runs by itself; `hooks/` directory):
+   - `statusline.sh` — prints `⛽ 62% · 620k/1M · Opus` in the status line and writes the percentage to a state file (the sensor).
+   - `context-guard.sh` — at thresholds injects a short directive to the model ("checkpoint now", "don't start new large chunks", "full handoff immediately"). Silent otherwise. If the state file is missing it computes the percentage from the session transcript (fallback). **Subagent-aware**: a subagent's tool calls are measured against the *subagent's own* transcript and window, under its own state key — parent warnings are never consumed by subagents.
+   - `sessionstart.sh` — after an **auto**-compact immediately tells the agent "here is your cheat-sheet, move the fresh changes from the summary into it and continue"; after a **manual** `/compact` — only a hint (`/pf-resume <slug>`), nothing is loaded by default; on startup/resume it lists active cheat-sheets. Also cleans up state files older than 14 days.
+   - `precompact.sh` — logs every compaction (manual/auto) to `~/.claude/context-state/compacts.log`.
 
-## Установка (3 шага + проверка)
+The whole harness costs **≈180 tokens per session worst-case** (all injections are short and fire once per threshold).
 
-Требования: macOS/Linux, bash, `python3` или `jq` (достаточно любого из двух). Claude Code с поддержкой хуков и statusline.
+## Installation (3 steps + check)
+
+Requirements: macOS/Linux, bash, `python3` or `jq` (either one is enough). Claude Code with hooks and statusline support.
 
 ```bash
 git clone git@github.com:turvodnik/pf-handoff.git
 cd pf-handoff
 ```
 
-1. **Правила** — вставьте содержимое `docs/rules-section.md` в конец вашего `~/.claude/CLAUDE.md` (или канонического AGENTS.md, если у вас мульти-агентная схема). Скиллы ссылаются на эти правила как на «§13» — если у вас другая нумерация разделов, оставьте заголовок раздела как есть или поправьте ссылки.
-2. **Скиллы**:
+1. **Rules** — paste the contents of `docs/rules-section.md` at the end of your `~/.claude/CLAUDE.md` (or your canonical AGENTS.md in a multi-agent setup). The skills refer to these rules as "§13" — if your section numbering differs, keep the heading as-is or adjust the references.
+2. **Skills**:
    ```bash
    cp -R skills/pf-handoff skills/pf-resume ~/.claude/skills/
    ```
-   (Codex/Gemini: те же папки в `~/.codex/skills/` и `~/.gemini/skills/` — скиллы файловые и работают у любого агента.)
-3. **Хуки**:
+   (Codex/Gemini: the same folders into `~/.codex/skills/` and `~/.gemini/skills/` — the skills are plain files and work for any agent.)
+3. **Hooks**:
    ```bash
    bash hooks/install.sh
-   bash hooks/doctor.sh   # все строки OK, exit 0
+   bash hooks/doctor.sh   # every line OK, exit 0
    ```
-   `install.sh` идемпотентен (повторный запуск не плодит дублей), перед правкой делает бэкап `~/.claude/settings.json.bak-<дата>` и вычисляет пути от места клона — **не перемещайте клон после установки** (переместили — запустите `install.sh` заново).
+   `install.sh` is idempotent (re-running creates no duplicates), backs up `~/.claude/settings.json.bak-<date>` before editing, and derives paths from the clone location — **don't move the clone after installing** (if you do, run `install.sh` again).
 
-Откат: восстановить бэкап settings.json и удалить две папки скиллов.
+Uninstall: restore the settings.json backup and delete the two skill folders.
 
-## Что важно знать
+## Configuration
 
-- **Ваш прежний statusline**: `install.sh` заменяет команду статус-строки на свою (старая сохраняется в бэкапе). Если у вас уже стоит свой скрипт статус-строки — загляните в `hooks/statusline.sh` и позовите свой скрипт из него по образцу вызова Orca.
-- **Orca опциональна**: обёртка вызывает скрипт Orca только если он существует; на машине без Orca всё работает без изменений.
-- **Режимы разрешений**: хуки работают во всех режимах, включая bypass permissions — режим влияет только на вопросы «разрешить инструмент?».
-- **Headless (`claude -p`)** не запускает SessionStart-хук и statusline — там агента ведут правила (он сам ищет шпаргалку), а процент guard считает из транскрипта.
-- **Субагенты**: у каждого своё свежее окно — это главная защита оркестраторов. Правило из `docs/rules-section.md`: субагент возвращает в чат родителя короткую сводку, а результат кладёт в файл.
-- **Честное ограничение**: конспект компакта и шпаргалка сохраняют рабочее состояние (цель, решения, следующий шаг, отменённое), но не дословную память всего чата. Дословное — в транскрипте сессии и журнале проекта.
+Per-project thresholds — `<project>/.agents/context-budget.json`:
 
-## Памятка «когда что нажимать»
+```json
+{"thresholds": [50, 70, 85]}
+```
 
-| Ситуация | Действие |
+Exactly three integers in ascending order (1–99). Zone meanings stay the same: zone 1 — checkpoint, delegate big chunks; zone 2 — no new medium/large chunks; zone 3 — full handoff immediately. Missing or invalid file → defaults 60/80/90.
+
+## Good to know
+
+- **Your existing statusline**: `install.sh` replaces the status-line command with its own (the old one is kept in the backup). If you already run a custom statusline script, look inside `hooks/statusline.sh` and call yours from there, following the Orca-call pattern.
+- **Orca is optional**: the wrapper calls the Orca script only if it exists; on a machine without Orca everything works unchanged.
+- **Permission modes**: hooks run in every mode, including bypass permissions — the mode only affects "allow this tool?" prompts.
+- **Headless (`claude -p`)** does not run the SessionStart hook or the statusline — there the agent is guided by the rules (it looks for the cheat-sheet itself), and the guard computes the percentage from the transcript.
+- **Subagents**: each gets its own fresh window — that is the main protection for orchestrators. The guard measures each subagent against its own transcript; window size for that estimate comes from the model configured in settings.json, so if a subagent runs a different model (e.g. Haiku with 200k) the estimate is approximate. Rule from `docs/rules-section.md`: a subagent writes its **full** result to a file (nothing is lost — essential for focus groups and research), and returns only a short summary to the parent chat.
+- **Honest limitation**: the compact summary plus the cheat-sheet preserve the working state (goal, decisions, next step, cancelled directions) — not a verbatim memory of the whole chat. Verbatim history lives in the session transcript and the project journal.
+
+## "What to press when"
+
+| Situation | Action |
 |---|---|
-| Большая задача на автомате | ничего — агент чекпоинтит сам, автокомпакт + хук подхватят |
-| Почистить окно, остаться в чате | `/compact` (агент перед этим сам сделает чекпоинт) |
-| Пауза | `/pf-handoff`, потом просто продолжайте |
-| Закрыли терминал | `claude --continue` |
-| Новый чат | `/pf-resume` |
-| Начисто в том же окне | `/pf-handoff` → `/clear` → `/pf-resume` |
-| Несвязанная новая задача | `/clear` без resume |
+| Big task on autopilot | nothing — the agent checkpoints itself; auto-compact + hook pick it up |
+| Free the window, stay in the chat | `/compact` (the agent checkpoints first) |
+| Taking a break | `/pf-handoff`, then just continue later |
+| Closed the terminal | `claude --continue` |
+| New chat | `/pf-resume` |
+| Clean slate in the same window | `/pf-handoff` → `/clear` → `/pf-resume` |
+| Unrelated new task | `/clear` without resume |
 
-## Разработка
+## Development
 
-Канон разработки сейчас живёт в приватном `_tools` владельца (skill-library + context-hooks); этот репозиторий — дистрибутив. Перед релизом: `bash sync-from-tools.sh` → `git diff` → запись в `CHANGELOG.md` → коммит → тег `vX.Y.Z`. Версионирование — semver: ломающие изменения (формат HANDOFF, имена state-файлов, контракт скиллов) = major.
+The development canon currently lives in the owner's private `_tools` (skill-library + context-hooks); this repository is the distribution. Before a release: `bash sync-from-tools.sh` → `git diff` → update `CHANGELOG.md` (both languages) → commit → tag `vX.Y.Z`. Versioning is semver: breaking changes (HANDOFF format, state file names, skill contracts) = major.
 
-## Мини-глоссарий
+Companion tool: **pf-workflow** (the pf-* task pipeline: spec → tickets → executors → review). pf-handoff works standalone; together they form the complete workflow system.
 
-- **Токен** — единица объёма текста для модели (≈3,5 символа смешанного текста).
-- **Компакт/автокомпакт** — сжатие истории чата в конспект: руками `/compact` или автоматически у края окна.
-- **Хук (hook)** — ваш скрипт, который Claude Code запускает сам на событии (старт сессии, перед сжатием и т.п.).
-- **additionalContext** — механизм, которым хук вбрасывает модели короткую служебную заметку.
-- **State-файл** — файлик-датчик (`~/.claude/context-state/<session>.json`), через который статус-строка сообщает хукам текущий процент окна.
-- **Fallback** — запасной путь: если датчик молчит, процент пересчитывается из транскрипта сессии.
+## Mini-glossary
+
+- **Token** — the unit of text volume for a model (≈3.5 characters of mixed text).
+- **Compact / auto-compact** — compressing chat history into a summary: manually via `/compact` or automatically near the window edge.
+- **Hook** — your script that Claude Code runs by itself on an event (session start, before compaction, etc.).
+- **additionalContext** — the mechanism a hook uses to inject a short service note to the model.
+- **State file** — the sensor file (`~/.claude/context-state/<session>.json`) through which the statusline reports the current window percentage to the hooks.
+- **Fallback** — the backup path: if the sensor is silent, the percentage is recomputed from the session transcript.

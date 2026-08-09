@@ -13,7 +13,8 @@ run() {
 
   local row source cwd_in
   if [ "$has_jq" = 1 ]; then
-    row=$(printf '%s' "$input" | jq -r '[(.source // ""), (.cwd // ""), (.session_id // "")] | @tsv' 2>/dev/null)
+    #  вместо таба: табы у bash-read схлопываются, пустые поля сдвигают соседей.
+    row=$(printf '%s' "$input" | jq -r '[(.source // ""), (.cwd // ""), (.session_id // "")] | join("\u001f")' 2>/dev/null)
   else
     row=$(printf '%s' "$input" | python3 -c '
 import json, sys
@@ -21,10 +22,10 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
-print("\t".join([str(d.get("source") or ""), str(d.get("cwd") or ""), str(d.get("session_id") or "")]))
+print("\x1f".join([str(d.get("source") or ""), str(d.get("cwd") or ""), str(d.get("session_id") or "")]))
 ' 2>/dev/null)
   fi
-  IFS=$'\t' read -r source cwd_in sid <<< "$row"
+  IFS=$'\x1f' read -r source cwd_in sid <<< "$row"
 
   case "$source" in
     startup|resume|compact) : ;;
