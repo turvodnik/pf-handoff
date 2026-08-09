@@ -86,7 +86,13 @@ The development canon currently lives in the owner's private `_tools` (skill-lib
 
 **pf-handoff is fully standalone** — it needs no task tracker, ticket system, or any other tooling. The rules mention a decision journal and task packets; if you don't use those, the corresponding steps simply don't apply (see the note at the top of `docs/rules-section.md`).
 
-**Optional companion — pf-workflow** (the author's pf-* task pipeline: spec → tickets → executors → review). If it is installed too, the two tools integrate automatically with zero configuration: HANDOFF files reference ticket ids in the `task:` field, the executor contract checks the active HANDOFF before starting, mid-course replanning updates the "Do-not-do" list, and the retro reviews the compaction log. Without pf-workflow, nothing is missing — pf-handoff simply runs solo.
+**Optional companion — [pf-workflow](https://github.com/turvodnik/pf-workflow)**, the author's task pipeline. pf-handoff runs completely solo; add pf-workflow if you also want a disciplined delivery process on top of context safety. What it gives you:
+- `pf-spec` — an interrogation that turns a vague idea into a SPEC *before* any work starts;
+- `pf-tickets` — the SPEC split into self-contained task packets that a fresh session can execute without your chat history;
+- `pf-do` + review — an executor contract with proof-based acceptance: every criterion is verified by a fresh command run, "should work" doesn't count;
+- `pf-replan` — mid-course changes without losing finished work; `pf-retro` — regular process retrospectives.
+
+When both are installed they integrate automatically, zero configuration: HANDOFF files reference ticket ids in `task:`, the executor checks the active HANDOFF before starting, replanning updates the "Do-not-do" list, and the retro reviews the compaction log.
 
 ## Mini-glossary
 

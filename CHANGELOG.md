@@ -4,6 +4,10 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.1.2 — 2026-08-10
+
+- README (both languages): the optional companion [pf-workflow](https://github.com/turvodnik/pf-workflow) now has a direct link and a concise "what it gives you" list (spec interrogation, self-contained task packets, proof-based acceptance, replanning, retros); the zero-config integration description kept.
+
 ## v1.1.1 — 2026-08-10
 
 - Repository made public (read access by link); MIT license added.
