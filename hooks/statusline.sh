@@ -9,9 +9,10 @@
 set -u
 
 # Путь переопределяем только для тестов (фикстура "орковский скрипт отсутствует"
-# без переименования реального файла Orca — трогать /Users/pifagor/.orca/agent-hooks/*
-# запрещено пакетом). По умолчанию — боевой путь, поведение не меняется.
-ORCA_STATUSLINE="${CONTEXT_HOOKS_ORCA_STATUSLINE:-/Users/pifagor/.orca/agent-hooks/claude-statusline.sh}"
+# без переименования реального файла Orca — чужие файлы ~/.orca/agent-hooks/*
+# не трогаем). По умолчанию — стандартный путь Orca; нет Orca — условие ниже
+# просто пропустит вызов, наша часть работает без изменений.
+ORCA_STATUSLINE="${CONTEXT_HOOKS_ORCA_STATUSLINE:-$HOME/.orca/agent-hooks/claude-statusline.sh}"
 
 run() {
   local input

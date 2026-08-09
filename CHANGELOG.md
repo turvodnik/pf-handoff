@@ -4,6 +4,13 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.1.1 — 2026-08-10
+
+- Repository made public (read access by link); MIT license added.
+- `statusline.sh`: the Orca script path now derives from `$HOME` instead of a personal hardcoded path (portability; on machines without Orca the call is simply skipped).
+- README (both languages): standalone usage stated explicitly; pf-workflow described as an optional companion with automatic zero-config integration when present.
+- Added `.gitignore`.
+
 ## v1.1.0 — 2026-08-09
 
 - **Subagent-aware guard**: a subagent's tool calls are now measured against the subagent's *own* transcript and window (path derived as `<dir>/<session>/subagents/agent-<id>.jsonl`), under its own state key `agent-<id>.json`. Previously a threshold warning could be "swallowed" by a subagent (consuming the parent's `announced` flag) while reporting the parent's percentage — misleading for both sides.
