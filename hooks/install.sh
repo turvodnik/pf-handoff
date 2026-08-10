@@ -23,8 +23,11 @@ for f in "$STATUSLINE_SH" "$CONTEXT_GUARD_SH" "$SESSIONSTART_SH" "$PRECOMPACT_SH
 done
 
 if [ ! -f "$SETTINGS_PATH" ]; then
-  echo "install.sh: settings.json не найден: $SETTINGS_PATH" >&2
-  exit 1
+  # Свежая машина: Claude Code ещё не создал settings.json — создаём минимальный
+  # и продолжаем (иначе установка «из коробки» невозможна).
+  mkdir -p "$(dirname "$SETTINGS_PATH")"
+  printf '{}\n' > "$SETTINGS_PATH"
+  echo "install.sh: settings.json не найден — создан новый пустой: $SETTINGS_PATH"
 fi
 
 if ! python3 -m json.tool "$SETTINGS_PATH" > /dev/null 2>&1; then
@@ -74,9 +77,9 @@ def add_if_missing(evt; marker; entry):
 merge_ok=1
 if [ "$has_jq" = 1 ]; then
   if ! jq --arg sl_cmd "$SL_CMD" --arg cg_cmd "$CG_CMD" --arg ss_cmd "$SS_CMD" --arg pc_cmd "$PC_CMD" \
-         --arg cg_marker "context-hooks/context-guard.sh" \
-         --arg ss_marker "context-hooks/sessionstart.sh" \
-         --arg pc_marker "context-hooks/precompact.sh" \
+         --arg cg_marker "/context-guard.sh" \
+         --arg ss_marker "/sessionstart.sh" \
+         --arg pc_marker "/precompact.sh" \
          "$JQ_FILTER" "$SETTINGS_PATH" > "$TMP_OUT" 2>/dev/null; then
     merge_ok=0
   fi
@@ -96,14 +99,17 @@ def add_if_missing(d, evt, marker, entry):
                 return
     arr.append(entry)
 
+# Маркеры — по имени файла, а не по имени каталога: в каноне _tools скрипты
+# лежат в context-hooks/, в публичном дистрибутиве — в hooks/. Маркер с
+# каталогом ломал идемпотентность и doctor у внешних пользователей.
 d["statusLine"] = {"type": "command", "command": sl_cmd}
-add_if_missing(d, "UserPromptSubmit", "context-hooks/context-guard.sh",
+add_if_missing(d, "UserPromptSubmit", "/context-guard.sh",
     {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd, "timeout": 10}]})
-add_if_missing(d, "PostToolUse", "context-hooks/context-guard.sh",
+add_if_missing(d, "PostToolUse", "/context-guard.sh",
     {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd, "timeout": 10}]})
-add_if_missing(d, "SessionStart", "context-hooks/sessionstart.sh",
+add_if_missing(d, "SessionStart", "/sessionstart.sh",
     {"hooks": [{"type": "command", "command": ss_cmd, "timeout": 10}]})
-add_if_missing(d, "PreCompact", "context-hooks/precompact.sh",
+add_if_missing(d, "PreCompact", "/precompact.sh",
     {"hooks": [{"type": "command", "command": pc_cmd, "timeout": 10}]})
 
 print(json.dumps(d, indent=2, ensure_ascii=False))

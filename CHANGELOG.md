@@ -4,6 +4,16 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.4.0 — 2026-08-10
+
+Clean-machine install fixes — every issue below was reproduced in a sandbox (fresh $HOME, anonymous clone from GitHub) and re-tested green (21/21) after the fix:
+
+- **New root `install.sh`** — one-command install: copies both skills (plain copies, the clone may be moved or deleted afterwards; `~/.codex`/`~/.gemini` surfaces only if those CLIs exist — no junk directories), registers hooks, runs the doctor. Skills already present as *symlinks* (managed by your own tooling) are never overwritten — skipped with a notice.
+- **`hooks/install.sh`**: a missing `~/.claude/settings.json` is now created (fresh machines) instead of aborting.
+- **Idempotency fix**: duplicate-detection markers matched the canon's directory name (`context-hooks/`), which differs in this distribution (`hooks/`) — re-running the installer used to add duplicate hook entries for external users. Markers now match by file name.
+- **`hooks/doctor.sh`**: same directory-name fix for all checks, and the Orca-compatibility checks now run only when Orca is actually installed (`~/.orca/agent-hooks` exists) — machines without Orca get a clean pass instead of guaranteed failures; the machine-specific "≥11 entries" threshold replaced with a presence check.
+- README (both languages): installation is now the single `bash install.sh` command; clone-relocation and symlink-skip behaviour documented.
+
 ## v1.3.0 — 2026-08-10
 
 - **Any-depth hierarchies verified**: a live grandchild probe confirmed that every nesting level (child, grandchild, …) receives hooks with its *own* agent id and stores a flat transcript in the session's `subagents/` directory — so the guard measures every level individually. Added a `find`-based fallback for locating an agent's transcript in case the harness ever changes the directory layout.

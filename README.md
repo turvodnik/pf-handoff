@@ -30,22 +30,19 @@ The whole harness costs **≈180 tokens per session worst-case** (all injections
 Requirements: macOS/Linux, bash, `python3` or `jq` (either one is enough). Claude Code with hooks and statusline support.
 
 ```bash
-git clone git@github.com:turvodnik/pf-handoff.git
+git clone https://github.com/turvodnik/pf-handoff.git
 cd pf-handoff
+bash install.sh
 ```
 
-1. **Rules** — paste the contents of `docs/rules-section.md` at the end of your `~/.claude/CLAUDE.md` (or your canonical AGENTS.md in a multi-agent setup). The skills refer to these rules as "§13" — if your section numbering differs, keep the heading as-is or adjust the references.
-2. **Skills**:
-   ```bash
-   cp -R skills/pf-handoff skills/pf-resume ~/.claude/skills/
-   ```
-   (Codex/Gemini: the same folders into `~/.codex/skills/` and `~/.gemini/skills/` — the skills are plain files and work for any agent.)
-3. **Hooks**:
-   ```bash
-   bash hooks/install.sh
-   bash hooks/doctor.sh   # every line OK, exit 0
-   ```
-   `install.sh` is idempotent (re-running creates no duplicates), backs up `~/.claude/settings.json.bak-<date>` before editing, and derives paths from the clone location — **don't move the clone after installing** (if you do, run `install.sh` again).
+That's it for the automated part: the installer copies both skills (as plain copies — to `~/.claude/skills`, plus `~/.codex`/`~/.gemini` if those CLIs exist), registers the hooks in `~/.claude/settings.json` (backing it up first; a missing settings.json is created), and runs the health check — every line should say OK.
+
+The one manual step: **paste the contents of `docs/rules-section.md`** at the end of your `~/.claude/CLAUDE.md` (or your canonical AGENTS.md in a multi-agent setup). The skills refer to these rules as "§13" — if your section numbering differs, keep the heading as-is or adjust the references.
+
+Notes:
+- The skills are installed as **copies**, so you may move or delete the clone afterwards; to update, `git pull && bash install.sh`. The hook entries in settings.json point at the clone's `hooks/` directory — if you move the clone, re-run `bash install.sh` from the new location.
+- If a skill already exists as a **symlink** (you manage skills with your own tooling), the installer skips it and says so.
+- Everything is idempotent: re-running creates no duplicates.
 
 Uninstall: restore the settings.json backup and delete the two skill folders.
 
