@@ -4,6 +4,10 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.2.0 — 2026-08-10
+
+- **Fleet rules** (orchestrator with dozens of subagents in flight): checkpoint a registry — "agent → task → result file → status" — into the HANDOFF *before* launching a wave; every agent's prompt must demand file output with a ≤15-line reply; at window thresholds launch no new waves, only receive. Rationale documented: a compaction mid-wait loses no data (results live in agents' files and transcripts, completion notifications reach even a compacted session) — the registry preserves the one thing that *was* at risk: knowing what is still pending and why.
+
 ## v1.1.2 — 2026-08-10
 
 - README (both languages): the optional companion [pf-workflow](https://github.com/turvodnik/pf-workflow) now has a direct link and a concise "what it gives you" list (spec interrogation, self-contained task packets, proof-based acceptance, replanning, retros); the zero-config integration description kept.

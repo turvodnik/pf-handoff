@@ -16,6 +16,8 @@ Memory layers: live task state — the HANDOFF file (`.agents/runtime/handoff/YY
 - Always rewritten as a whole, ≤120 lines. A decision changed — update immediately; cancelled things become one line under "Do-not-do".
 - One task = one file. Switched tasks — close the old HANDOFF (`status: closed`; coming back later — `pf-resume <slug>` reopens it) and start a new one: nothing foreign leaks into a fresh session.
 - Multi-agent: the HANDOFF is written by the task owner; other agents only read it. Subagents use file output: the FULL result goes to a file/ticket (nothing is lost — essential for focus groups and research), the parent chat gets a short summary, never a wall of text (the orchestrator's window is the most expensive resource).
+- Agent fleets: BEFORE launching a wave — checkpoint the HANDOFF with a registry "agent → task → result file → status"; each agent's prompt must state explicitly: "full result to file <path>, reply with a summary of ≤15 lines". Result received — mark it in the registry.
+- Fleet in flight while crossing window thresholds: launch no new waves, only receive. A compaction mid-wait loses nothing: results live in the agents' files and transcripts, completion notifications reach even a compacted session — the registry in the HANDOFF tells you what is still pending and why.
 - Checkpoints: at milestones, when crossing thresholds, before long risky steps. Session close — via `pf-handoff` (verification → journal → statuses).
 
 **Window thresholds** (percentages of a context window of any size; Claude receives them automatically via hooks, hook-less agents track them by milestones):
