@@ -47,7 +47,13 @@ print("\x1f".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") 
   if [ -n "$agent_id" ]; then
     local sub_tp
     sub_tp="$(dirname "$transcript_path")/$session_id/subagents/agent-$agent_id.jsonl"
-    [ -r "$sub_tp" ] || return 0
+    if [ ! -r "$sub_tp" ]; then
+      # Страховка на случай смены структуры каталогов harness'ом: сегодня ВСЕ
+      # уровни вложенности (сын, внук, …) лежат плоско в subagents/ главной
+      # сессии — проверено экспериментом с внуком 2026-08-10.
+      sub_tp=$(find "$(dirname "$transcript_path")/$session_id" -maxdepth 4 -name "agent-$agent_id.jsonl" 2>/dev/null | head -n 1)
+    fi
+    { [ -n "$sub_tp" ] && [ -r "$sub_tp" ]; } || return 0
     transcript_path="$sub_tp"
     session_id="agent-$agent_id"
   fi
