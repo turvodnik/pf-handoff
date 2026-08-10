@@ -4,6 +4,11 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.5.0 — 2026-08-10
+
+- **Rich two-line status bar** (ccstatusline-style, still zero dependencies — pure bash/awk): context progress bar with zone colours matching the §13 thresholds, tokens/window, git branch with session line counts, and a second line with subscription rate limits — `Session % | Reset | Weekly % | Weekly Reset`. Segments degrade gracefully when a field is absent; the Orca passthrough and the state-file sensor are unchanged.
+- Hardened per the independent QA round (82 scenarios, 7 findings fixed before release, per the release rule): non-numeric `used_percentage`/window values no longer blank the output or drop the state file; scalar `.model`/`.rate_limits`/`.workspace` no longer break the jq path; guaranteed exit 0 even without `$HOME`; control-character injection (ANSI/U+001F/newline) via payload strings is stripped at the extractor; over-long session ids no longer leave tmp litter; an unreadable previous state no longer resets `announced`; percentages use a dot regardless of locale.
+
 ## v1.4.2 — 2026-08-10
 
 Fixes from an independent adversarial QA round (64 scenarios; full credit to the findings):

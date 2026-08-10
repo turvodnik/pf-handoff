@@ -7,12 +7,27 @@
 #    и напечатать свою строку; 4) атомарно сохранить состояние сессии для
 #    context-guard.sh.
 set -u
+# Контракт «всегда exit 0»: без HOME не падаем (QA №3), числа — с точкой (не запятой).
+[ -z "${HOME:-}" ] && HOME="${TMPDIR:-/tmp}"
+export LC_ALL=C
 
 # Путь переопределяем только для тестов (фикстура "орковский скрипт отсутствует"
 # без переименования реального файла Orca — чужие файлы ~/.orca/agent-hooks/*
 # не трогаем). По умолчанию — стандартный путь Orca; нет Orca — условие ниже
 # просто пропустит вызов, наша часть работает без изменений.
 ORCA_STATUSLINE="${CONTEXT_HOOKS_ORCA_STATUSLINE:-$HOME/.orca/agent-hooks/claude-statusline.sh}"
+
+# "4hr 56m" / "4d 12hr 6m" / "0m" из epoch-времени сброса; мусор -> "—".
+fmt_reset() {
+  local ep="${1%%.*}" now delta d h m
+  case "$ep" in ''|*[!0-9]*) printf '%s' '—'; return 0 ;; esac
+  now=$(date +%s)
+  delta=$(( ep - now )); [ "$delta" -lt 0 ] && delta=0
+  d=$(( delta / 86400 )); h=$(( (delta % 86400) / 3600 )); m=$(( (delta % 3600) / 60 ))
+  if [ "$d" -gt 0 ]; then printf '%dd %dhr %dm' "$d" "$h" "$m"
+  elif [ "$h" -gt 0 ]; then printf '%dhr %dm' "$h" "$m"
+  else printf '%dm' "$m"; fi
+}
 
 run() {
   local input
@@ -31,6 +46,7 @@ run() {
   command -v jq >/dev/null 2>&1 && has_jq=1
 
   local row session_id pct_raw window_raw tokens_raw model_name
+  local lines_add lines_del five_pct five_reset seven_pct seven_reset cwd_in
   if [ "$has_jq" = 1 ]; then
     row=$(printf '%s' "$input" | jq -r '
       [
@@ -38,8 +54,15 @@ run() {
         (if (.context_window|type) == "object" then (.context_window.used_percentage // "null") else "null" end),
         (if (.context_window|type) == "object" then (.context_window.context_window_size // "null") else "null" end),
         (if (.context_window|type) == "object" then (.context_window.total_input_tokens // "null") else "null" end),
-        (.model.display_name // "")
-      ] | map(tostring) | join("\u001f")
+        (if (.model|type) == "object" then (.model.display_name // "") else "" end),
+        (if (.cost|type) == "object" then (.cost.total_lines_added // 0) else 0 end),
+        (if (.cost|type) == "object" then (.cost.total_lines_removed // 0) else 0 end),
+        (if (.rate_limits|type) == "object" and (.rate_limits.five_hour|type) == "object" then (.rate_limits.five_hour.used_percentage // "null") else "null" end),
+        (if (.rate_limits|type) == "object" and (.rate_limits.five_hour|type) == "object" then (.rate_limits.five_hour.resets_at // "null") else "null" end),
+        (if (.rate_limits|type) == "object" and (.rate_limits.seven_day|type) == "object" then (.rate_limits.seven_day.used_percentage // "null") else "null" end),
+        (if (.rate_limits|type) == "object" and (.rate_limits.seven_day|type) == "object" then (.rate_limits.seven_day.resets_at // "null") else "null" end),
+        (if (.workspace|type) == "object" then (.workspace.current_dir // .cwd // "") else (.cwd // "") end)
+      ] | map(tostring) | map(gsub("[\u0000-\u001F\u007F]"; " ")) | join("\u001f")
     ' 2>/dev/null)
   else
     row=$(printf '%s' "$input" | python3 -c '
@@ -48,51 +71,108 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
-cw = d.get("context_window")
-if not isinstance(cw, dict):
-    cw = {}
-def g(v):
-    return "null" if v is None else v
-row = [
-    str(d.get("session_id") or ""),
-    str(g(cw.get("used_percentage"))),
-    str(g(cw.get("context_window_size"))),
-    str(g(cw.get("total_input_tokens"))),
-    str((d.get("model") or {}).get("display_name") or ""),
-]
-print("\x1f".join(row))
-' 2>/dev/null)
+cw = d.get("context_window") if isinstance(d.get("context_window"), dict) else {}
+cost = d.get("cost") if isinstance(d.get("cost"), dict) else {}
+rl = d.get("rate_limits") if isinstance(d.get("rate_limits"), dict) else {}
+fh = rl.get("five_hour") if isinstance(rl.get("five_hour"), dict) else {}
+sd = rl.get("seven_day") if isinstance(rl.get("seven_day"), dict) else {}
+ws = d.get("workspace") if isinstance(d.get("workspace"), dict) else {}
+def g(src, key, default="null"):
+    v = src.get(key)
+    return default if v is None else v
+row = [str(d.get("session_id") or ""),
+       str(g(cw, "used_percentage")), str(g(cw, "context_window_size")), str(g(cw, "total_input_tokens")),
+       str(d.get("model", {}).get("display_name") or "") if isinstance(d.get("model"), dict) else "",
+       str(g(cost, "total_lines_added", "0")), str(g(cost, "total_lines_removed", "0")),
+       str(g(fh, "used_percentage")), str(g(fh, "resets_at")),
+       str(g(sd, "used_percentage")), str(g(sd, "resets_at")),
+       str(ws.get("current_dir") or d.get("cwd") or "")]
+import re
+row = [re.sub(r"[\x00-\x1f\x7f]", " ", x) for x in row]
+print("\x1f".join(row))' 2>/dev/null)
   fi
 
-  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name <<< "$row"
+  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name lines_add lines_del five_pct five_reset seven_pct seven_reset cwd_in <<< "$row"
 
-  # context_window отсутствует/null (или в нём нет used_percentage/размера) —
-  # печатаем только модель, состояние сессии не пишем (пороги считать не от чего).
+  # Числовая гигиена (QA №1/№4): нечисловые used_percentage/window → «нет контекста»,
+  # нечисловые tokens → 0. Иначе строка вроде "true" доходит до bash-арифметики
+  # и под set -u убивает подоболочку до printf (пустой вывод и потеря state).
+  case "${pct_raw:-null}" in ''|*[!0-9.]*) pct_raw="null" ;; esac
+  case "${window_raw:-null}" in ''|*[!0-9.]*) window_raw="null" ;; esac
+  window_raw="${window_raw%%.*}"; [ -z "$window_raw" ] && window_raw="null"
+  case "${tokens_raw:-0}" in ''|*[!0-9.]*) tokens_raw=0 ;; esac
+
+  # ---------- РЕНДЕР: 2 строки в стиле ccstatusline (референс Vladimir 2026-08-10;
+  # сам ccstatusline не ставим — §12 supply-chain, у нас нулевые зависимости) ----------
+  local C_RST=$'\033[0m' C_DIM=$'\033[2m' C_LBL=$'\033[1;36m' C_VAL=$'\033[36m'
+  local C_GRN=$'\033[32m' C_YLW=$'\033[33m' C_RED=$'\033[31m' C_BLU=$'\033[1;34m'
+  local SEP="${C_DIM} | ${C_RST}"
+
+  # Ветка git и счётчик строк сессии (+N,-N из cost.*)
+  local branch="" branch_seg=""
+  if [ -n "${cwd_in:-}" ] && [ -d "${cwd_in:-/nonexistent}" ]; then
+    branch=$(git -C "$cwd_in" symbolic-ref --short HEAD 2>/dev/null | tr -d '\000-\037\177')
+  fi
+  case "${lines_add:-}" in ''|null|*[!0-9]*) lines_add=0 ;; esac
+  case "${lines_del:-}" in ''|null|*[!0-9]*) lines_del=0 ;; esac
+  if [ -n "$branch" ]; then
+    branch_seg="${SEP}${C_YLW}⎇ ${branch}${C_RST}(${C_GRN}+${lines_add}${C_RST},${C_RED}-${lines_del}${C_RST})"
+  fi
+
+  # Строка 2: лимиты подписки (5-часовое окно и неделя) — если платформа их дала.
+  local line2="" s5 s7
+  if [ "${five_pct:-null}" != "null" ]; then
+    s5=$(awk -v v="$five_pct" 'BEGIN{printf "%.1f", v+0}')
+    line2="${C_BLU}Session:${C_RST} ${s5}%"
+    if [ "${five_reset:-null}" != "null" ]; then
+      line2="${line2}${SEP}${C_BLU}Reset:${C_RST} $(fmt_reset "$five_reset")"
+    fi
+  fi
+  if [ "${seven_pct:-null}" != "null" ]; then
+    s7=$(awk -v v="$seven_pct" 'BEGIN{printf "%.1f", v+0}')
+    [ -n "$line2" ] && line2="${line2}${SEP}"
+    line2="${line2}${C_BLU}Weekly:${C_RST} ${s7}%"
+    if [ "${seven_reset:-null}" != "null" ]; then
+      line2="${line2}${SEP}${C_BLU}Weekly Reset:${C_RST} $(fmt_reset "$seven_reset")"
+    fi
+  fi
+
+  # context_window отсутствует/null — печатаем без Context-сегмента, state не пишем.
   if [ "${pct_raw:-null}" = "null" ] || [ "${window_raw:-null}" = "null" ]; then
-    printf '⛽ %s\n' "${model_name:-?}"
+    printf '%s\n' "${C_LBL}Model:${C_RST} ${C_VAL}${model_name:-?}${C_RST}${branch_seg}"
+    [ -n "$line2" ] && printf '%s\n' "$line2"
     return 0
   fi
 
-  local pct_int tokens_int tokens_k win_label
+  local pct_int tokens_int tokens_k win_label filled bar zone
   pct_int=$(printf '%s' "$pct_raw" | cut -d. -f1)
   [ -z "$pct_int" ] && pct_int=0
   tokens_int=$(printf '%s' "${tokens_raw:-0}" | cut -d. -f1)
   [ -z "$tokens_int" ] && tokens_int=0
   tokens_k=$(( tokens_int / 1000 ))
 
-  if [ "$window_raw" = "1000000" ]; then
-    win_label="1M"
-  else
-    win_label="200k"
-  fi
+  case "$window_raw" in
+    1000000) win_label="1.0M" ;;
+    200000)  win_label="200k" ;;
+    *) win_label=$(awk -v w="$window_raw" 'BEGIN{ if (w>=1000000) printf "%.1fM", w/1000000; else printf "%dk", int(w/1000) }') ;;
+  esac
 
-  printf '⛽ %s%% · %sk/%s · %s\n' "$pct_int" "$tokens_k" "$win_label" "${model_name:-?}"
+  # Прогресс-бар 20 ячеек; цвет зоны согласован с порогами §13 (60/80).
+  filled=$(( pct_int / 5 )); [ "$filled" -gt 20 ] && filled=20; [ "$filled" -lt 0 ] && filled=0
+  bar=$(awk -v f="$filled" 'BEGIN{for(i=1;i<=20;i++) printf (i<=f ? "█" : "░")}')
+  if [ "$pct_int" -ge 80 ]; then zone="$C_RED"
+  elif [ "$pct_int" -ge 60 ]; then zone="$C_YLW"
+  else zone="$C_GRN"; fi
+
+  printf '%s\n' "${C_LBL}Model:${C_RST} ${C_VAL}${model_name:-?}${C_RST}${SEP}${C_LBL}Context:${C_RST} ${zone}[${bar}]${C_RST} ${tokens_k}k/${win_label} (${zone}${pct_int}%${C_RST})${branch_seg}"
+  [ -n "$line2" ] && printf '%s\n' "$line2"
 
   [ -z "$session_id" ] && return 0
   # session_id — только безопасные символы: он становится именем файла.
   case "$session_id" in
     *[!A-Za-z0-9._-]*) return 0 ;;
   esac
+  [ "${#session_id}" -gt 200 ] && return 0
 
   local state_dir tmp now
   state_dir="$HOME/.claude/context-state"
@@ -103,6 +183,11 @@ print("\x1f".join(row))
   # Поле announced (последний объявленный порог) принадлежит context-guard.sh —
   # при перезаписи state его обязательно ПЕРЕНОСИМ, иначе каждое обновление
   # статус-строки сбрасывало бы «уже объявлено» и guard спамил бы директивы.
+  # Файл есть, но нечитаем (права/гонка) — не перезаписываем: потеряли бы announced,
+  # и guard объявил бы порог повторно (QA №7).
+  if [ -f "$state_dir/$session_id.json" ] && [ ! -r "$state_dir/$session_id.json" ]; then
+    return 0
+  fi
   local prev_announced
   prev_announced=$(grep -oE '"announced":[[:space:]]*[0-9]+' "$state_dir/$session_id.json" 2>/dev/null | grep -oE '[0-9]+' | head -1)
   [ -z "${prev_announced:-}" ] && prev_announced=0
@@ -122,7 +207,7 @@ print(json.dumps({"pct": int(pct), "window": int(window), "input_tokens": int(to
   fi
 
   if [ -s "$tmp" ]; then
-    mv -f "$tmp" "$state_dir/$session_id.json"
+    mv -f "$tmp" "$state_dir/$session_id.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
     rm -f "$tmp" 2>/dev/null
   fi

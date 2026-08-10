@@ -18,7 +18,10 @@ A small kit — rules, two skills, and four hooks — that fixes the core pain o
    - `pf-handoff` — checkpoint or session close: verify what's proven → rewrite the cheat-sheet → statuses/journal.
    - `pf-resume` — pickup in a new chat or after `/clear`: reads the cheat-sheet and continues "as if it were the same chat". Reopens a closed file by slug; auto-closes cheat-sheets of already-finished tasks.
 4. **Hooks** (scripts Claude Code runs by itself; `hooks/` directory):
-   - `statusline.sh` — prints `⛽ 62% · 620k/1M · Opus` in the status line and writes the percentage to a state file (the sensor).
+   - `statusline.sh` — a two-line rich status bar (ccstatusline-style, zero dependencies) and the sensor writing the window percentage to a state file:
+     `Model: Fable 5 | Context: [██░░░░░░░░░░░░░░░░░░] 110k/1.0M (11%) | ⎇ main(+0,-0)`
+     `Session: 0.0% | Reset: 4hr 56m | Weekly: 18.0% | Weekly Reset: 4d 12hr 6m`
+     The bar colour follows the zones (green < 60%, yellow 60–79%, red ≥ 80%); Session/Weekly show your subscription rate limits with time to reset; the branch segment shows lines added/removed this session. Segments degrade gracefully when data is absent. Renders in the Claude Code terminal (other CLIs have no custom-statusline hook; the desktop app doesn't render a status line — the sensor falls back to transcript parsing there).
    - `context-guard.sh` — at thresholds injects a short directive to the model ("checkpoint now", "don't start new large chunks", "full handoff immediately"). Silent otherwise. If the state file is missing it computes the percentage from the session transcript (fallback). **Subagent-aware**: a subagent's tool calls are measured against the *subagent's own* transcript and window, under its own state key — parent warnings are never consumed by subagents.
    - `sessionstart.sh` — after an **auto**-compact immediately tells the agent "here is your cheat-sheet, move the fresh changes from the summary into it and continue"; after a **manual** `/compact` — only a hint (`/pf-resume <slug>`), nothing is loaded by default; on startup/resume it lists active cheat-sheets. Also cleans up state files older than 14 days.
    - `precompact.sh` — logs every compaction (manual/auto) to `~/.claude/context-state/compacts.log`.
