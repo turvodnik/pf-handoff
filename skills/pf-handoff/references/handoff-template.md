@@ -1,7 +1,7 @@
 ---
-status: active        # active | closed
+status: active
 session_id: —
-task: —               # T-### или «—»
+task: —
 updated: <YYYY-MM-DD HH:MM>
 ---
 

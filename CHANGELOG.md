@@ -4,6 +4,10 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.4.1 — 2026-08-10
+
+- **Fix**: a HANDOFF file created from the template *as-is* was invisible to the SessionStart hook — the template's frontmatter carried an inline comment (`status: active   # active | closed`) while the hook's pattern required the line to end right after "active". The pattern now tolerates trailing comments, and the template frontmatter is comment-free. Found by the standalone-install test (12/12 green after the fix).
+
 ## v1.4.0 — 2026-08-10
 
 Clean-machine install fixes — every issue below was reproduced in a sandbox (fresh $HOME, anonymous clone from GitHub) and re-tested green (21/21) after the fix:
