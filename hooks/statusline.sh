@@ -89,6 +89,10 @@ print("\x1f".join(row))
   printf '⛽ %s%% · %sk/%s · %s\n' "$pct_int" "$tokens_k" "$win_label" "${model_name:-?}"
 
   [ -z "$session_id" ] && return 0
+  # session_id — только безопасные символы: он становится именем файла.
+  case "$session_id" in
+    *[!A-Za-z0-9._-]*) return 0 ;;
+  esac
 
   local state_dir tmp now
   state_dir="$HOME/.claude/context-state"
@@ -96,17 +100,25 @@ print("\x1f".join(row))
   now=$(date +%s)
   tmp="$state_dir/.tmp.$$.$RANDOM"
 
+  # Поле announced (последний объявленный порог) принадлежит context-guard.sh —
+  # при перезаписи state его обязательно ПЕРЕНОСИМ, иначе каждое обновление
+  # статус-строки сбрасывало бы «уже объявлено» и guard спамил бы директивы.
+  local prev_announced
+  prev_announced=$(grep -oE '"announced":[[:space:]]*[0-9]+' "$state_dir/$session_id.json" 2>/dev/null | grep -oE '[0-9]+' | head -1)
+  [ -z "${prev_announced:-}" ] && prev_announced=0
+
   if [ "$has_jq" = 1 ]; then
     jq -n --argjson pct "$pct_int" --argjson window "$window_raw" \
           --argjson input_tokens "$tokens_int" --argjson updated "$now" \
-      '{pct: $pct, window: $window, input_tokens: $input_tokens, updated: $updated}' \
+          --argjson announced "$prev_announced" \
+      '{pct: $pct, window: $window, input_tokens: $input_tokens, updated: $updated, announced: $announced}' \
       > "$tmp" 2>/dev/null
   else
     python3 -c '
 import json, sys
-pct, window, tok, upd = sys.argv[1:5]
-print(json.dumps({"pct": int(pct), "window": int(window), "input_tokens": int(tok), "updated": int(upd)}))
-' "$pct_int" "$window_raw" "$tokens_int" "$now" > "$tmp" 2>/dev/null
+pct, window, tok, upd, ann = sys.argv[1:6]
+print(json.dumps({"pct": int(pct), "window": int(window), "input_tokens": int(tok), "updated": int(upd), "announced": int(ann)}))
+' "$pct_int" "$window_raw" "$tokens_int" "$now" "$prev_announced" > "$tmp" 2>/dev/null
   fi
 
   if [ -s "$tmp" ]; then

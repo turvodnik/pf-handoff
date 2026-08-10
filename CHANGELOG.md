@@ -4,6 +4,17 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.4.2 — 2026-08-10
+
+Fixes from an independent adversarial QA round (64 scenarios; full credit to the findings):
+
+- **announced survives statusline refreshes** (major): the statusline rewrote the session state without the `announced` field, so in a real terminal every refresh reset "already announced" and the guard re-issued the same threshold directive over and over. The field is now carried over on every rewrite.
+- **Installer never deletes foreign data**: a pre-existing real directory named like our skills is replaced only if its SKILL.md carries our `name:`; anything else is skipped with a notice (previously silent `rm -rf`).
+- **Dotfiles-friendly**: a symlinked `~/.claude/settings.json` is edited through its target — the symlink stays a symlink.
+- **Frontmatter-strict pickup**: `status: active` inside a file body can no longer revive a closed HANDOFF — only the frontmatter counts.
+- **Path hardening**: `session_id`/`agent_id` from hook input are sanitized before being used as file names (a crafted `../evil` id could write outside the state directory).
+- Cosmetic: installer's before/after counters no longer print a stray zero on a fresh settings.json.
+
 ## v1.4.1 — 2026-08-10
 
 - **Fix**: a HANDOFF file created from the template *as-is* was invisible to the SessionStart hook — the template's frontmatter carried an inline comment (`status: active   # active | closed`) while the hook's pattern required the line to end right after "active". The pattern now tolerates trailing comments, and the template frontmatter is comment-free. Found by the standalone-install test (12/12 green after the fix).

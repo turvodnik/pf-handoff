@@ -62,9 +62,11 @@ print("\x1f".join([str(d.get("source") or ""), str(d.get("cwd") or ""), str(d.ge
     mtime=$(stat -f %m "$f" 2>/dev/null) || continue
     [ -z "$mtime" ] && continue
     if [ "$mtime" -lt "$cutoff" ] 2>/dev/null; then continue; fi
-    # «active» может сопровождаться хвостом-комментарием (например, из шаблона:
-    # «status: active   # active | closed») — терпим всё после пробела.
-    if head -n 20 "$f" 2>/dev/null | grep -qE '^status:[[:space:]]*"?active"?([[:space:]]|$)'; then
+    # Смотрим ТОЛЬКО frontmatter (между первой и второй «---»): строка
+    # «status: active» в теле файла не должна оживлять closed-шпаргалку.
+    # «active» может сопровождаться хвостом-комментарием — терпим всё после пробела.
+    if awk 'NR==1 && $0!="---"{exit 1} NR>1 && $0=="---"{exit} NR>1{print}' "$f" 2>/dev/null \
+       | grep -qE '^status:[[:space:]]*"?active"?([[:space:]]|$)'; then
       listing="${listing}${mtime}	${f}
 "
     fi

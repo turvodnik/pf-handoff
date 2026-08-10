@@ -35,6 +35,9 @@ print("\x1f".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") 
   IFS=$'\x1f' read -r session_id event transcript_path agent_id cwd_in <<< "$row"
   [ -z "$session_id" ] && return 0
   [ -z "$event" ] && event="UserPromptSubmit"
+  # session_id и agent_id становятся именами файлов — только безопасные символы.
+  case "$session_id" in *[!A-Za-z0-9._-]*) return 0 ;; esac
+  case "${agent_id:-}" in *[!A-Za-z0-9._-]*) return 0 ;; esac
 
   # Субагентский вызов (во входе есть agent_id): процент РОДИТЕЛЯ для субагента —
   # дезинформация (у него своё, отдельное окно), а расход родительского

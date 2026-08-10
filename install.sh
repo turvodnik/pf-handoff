@@ -17,8 +17,15 @@ install_skill_into() {
     return 0
   fi
   if [ -d "$dst" ]; then
-    rm -rf "$dst"
-    echo "обновляю: $dst"
+    # Сносим только СВОЮ прежнюю копию (SKILL.md с нашим именем) — чужую
+    # одноимённую папку не трогаем: молчаливый rm -rf чужих данных недопустим.
+    if grep -q "^name: $sk\$" "$dst/SKILL.md" 2>/dev/null; then
+      rm -rf "$dst"
+      echo "обновляю: $dst"
+    else
+      echo "ПРОПУСК: $dst — существующая папка не похожа на наш скилл (нет «name: $sk» в SKILL.md); разберитесь вручную"
+      return 0
+    fi
   fi
   mkdir -p "$surface"
   cp -R "$HERE/skills/$sk" "$dst"

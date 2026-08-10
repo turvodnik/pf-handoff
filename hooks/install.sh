@@ -10,6 +10,13 @@ set -u
 SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
+# settings.json бывает симлинком (dotfiles-репозитории): работаем с целью,
+# иначе mv заменил бы симлинк обычным файлом, а цель осталась бы старой.
+if [ -L "$SETTINGS_PATH" ]; then
+  SETTINGS_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$SETTINGS_PATH")"
+  echo "install.sh: settings.json — симлинк, работаю с его целью: $SETTINGS_PATH"
+fi
+
 STATUSLINE_SH="$SCRIPT_DIR/statusline.sh"
 CONTEXT_GUARD_SH="$SCRIPT_DIR/context-guard.sh"
 SESSIONSTART_SH="$SCRIPT_DIR/sessionstart.sh"
@@ -53,7 +60,7 @@ BACKUP_PATH="${SETTINGS_PATH}.bak-${TS}"
 cp "$SETTINGS_PATH" "$BACKUP_PATH"
 echo "install.sh: бэкап создан: $BACKUP_PATH"
 
-BEFORE_ORCA_COUNT=$(grep -c 'orca/agent-hooks' "$SETTINGS_PATH" 2>/dev/null || echo 0)
+BEFORE_ORCA_COUNT=$(grep -c 'orca/agent-hooks' "$SETTINGS_PATH" 2>/dev/null); BEFORE_ORCA_COUNT=${BEFORE_ORCA_COUNT:-0}
 
 has_jq=0
 command -v jq >/dev/null 2>&1 && has_jq=1
@@ -134,7 +141,7 @@ fi
 
 mv "$TMP_OUT" "$SETTINGS_PATH"
 
-AFTER_ORCA_COUNT=$(grep -c 'orca/agent-hooks' "$SETTINGS_PATH" 2>/dev/null || echo 0)
+AFTER_ORCA_COUNT=$(grep -c 'orca/agent-hooks' "$SETTINGS_PATH" 2>/dev/null); AFTER_ORCA_COUNT=${AFTER_ORCA_COUNT:-0}
 
 echo "install.sh: готово. $SETTINGS_PATH обновлён (jq=$has_jq)."
 echo "install.sh: grep -c 'orca/agent-hooks': до=$BEFORE_ORCA_COUNT, после=$AFTER_ORCA_COUNT"
