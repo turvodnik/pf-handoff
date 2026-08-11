@@ -4,7 +4,7 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
-## v1.7.0 — 2026-08-11
+## v1.7.0 — 2026-08-12
 
 Skills rewritten in English, startup-cost diet for the rules, plus an `effort` status-bar widget:
 
