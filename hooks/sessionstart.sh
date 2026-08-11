@@ -58,7 +58,7 @@ print("\x1f".join([str(d.get("source") or ""), str(d.get("cwd") or ""), str(d.ge
   local listing f mtime
   listing=""
   for f in "$handoff_dir"/*.md; do
-    [ -e "$f" ] || continue
+    [ -f "$f" ] || continue
     mtime=$(stat -f %m "$f" 2>/dev/null) || continue
     [ -z "$mtime" ] && continue
     if [ "$mtime" -lt "$cutoff" ] 2>/dev/null; then continue; fi

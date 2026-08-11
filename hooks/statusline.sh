@@ -46,7 +46,7 @@ run() {
   command -v jq >/dev/null 2>&1 && has_jq=1
 
   local row session_id pct_raw window_raw tokens_raw model_name
-  local lines_add lines_del five_pct five_reset seven_pct seven_reset cwd_in
+  local lines_add lines_del cost_usd dur_ms five_pct five_reset seven_pct seven_reset cwd_in
   if [ "$has_jq" = 1 ]; then
     row=$(printf '%s' "$input" | jq -r '
       [
@@ -57,6 +57,8 @@ run() {
         (if (.model|type) == "object" then (.model.display_name // "") else "" end),
         (if (.cost|type) == "object" then (.cost.total_lines_added // 0) else 0 end),
         (if (.cost|type) == "object" then (.cost.total_lines_removed // 0) else 0 end),
+        (if (.cost|type) == "object" then (.cost.total_cost_usd // "null") else "null" end),
+        (if (.cost|type) == "object" then (.cost.total_duration_ms // "null") else "null" end),
         (if (.rate_limits|type) == "object" and (.rate_limits.five_hour|type) == "object" then (.rate_limits.five_hour.used_percentage // "null") else "null" end),
         (if (.rate_limits|type) == "object" and (.rate_limits.five_hour|type) == "object" then (.rate_limits.five_hour.resets_at // "null") else "null" end),
         (if (.rate_limits|type) == "object" and (.rate_limits.seven_day|type) == "object" then (.rate_limits.seven_day.used_percentage // "null") else "null" end),
@@ -84,6 +86,7 @@ row = [str(d.get("session_id") or ""),
        str(g(cw, "used_percentage")), str(g(cw, "context_window_size")), str(g(cw, "total_input_tokens")),
        str(d.get("model", {}).get("display_name") or "") if isinstance(d.get("model"), dict) else "",
        str(g(cost, "total_lines_added", "0")), str(g(cost, "total_lines_removed", "0")),
+       str(g(cost, "total_cost_usd")), str(g(cost, "total_duration_ms")),
        str(g(fh, "used_percentage")), str(g(fh, "resets_at")),
        str(g(sd, "used_percentage")), str(g(sd, "resets_at")),
        str(ws.get("current_dir") or d.get("cwd") or "")]
@@ -92,7 +95,7 @@ row = [re.sub(r"[\x00-\x1f\x7f]", " ", x) for x in row]
 print("\x1f".join(row))' 2>/dev/null)
   fi
 
-  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name lines_add lines_del five_pct five_reset seven_pct seven_reset cwd_in <<< "$row"
+  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name lines_add lines_del cost_usd dur_ms five_pct five_reset seven_pct seven_reset cwd_in <<< "$row"
 
   # Числовая гигиена (QA №1/№4): нечисловые used_percentage/window → «нет контекста»,
   # нечисловые tokens → 0. Иначе строка вроде "true" доходит до bash-арифметики
@@ -102,70 +105,172 @@ print("\x1f".join(row))' 2>/dev/null)
   window_raw="${window_raw%%.*}"; [ -z "$window_raw" ] && window_raw="null"
   case "${tokens_raw:-0}" in ''|*[!0-9.]*) tokens_raw=0 ;; esac
 
-  # ---------- РЕНДЕР: 2 строки в стиле ccstatusline (референс Vladimir 2026-08-10;
-  # сам ccstatusline не ставим — §12 supply-chain, у нас нулевые зависимости) ----------
+  # ---------- РЕНДЕР: конфигурируемый, стиль ccstatusline (референс Vladimir);
+  # сам ccstatusline не ставим — §12 supply-chain, у нас ноль зависимостей.
+  # Конфиг (опционален): ~/.config/pf-handoff/statusline.json — раскладка строк,
+  # бар, разделитель, цвета. Нет файла или он кривой — дефолты (вид без конфига
+  # идентичен v1.5.0). Env-переопределение пути — для тестов.
+  local cfg_file="${PF_STATUSLINE_CONFIG:-$HOME/.config/pf-handoff/statusline.json}"
+  local cfg_l1="model,context,branch" cfg_l2="session,weekly"
+  local cfg_bw=20 cfg_bf="█" cfg_be="░" cfg_sep=" | " cfg_colors=1
+  if [ -f "$cfg_file" ] && [ -r "$cfg_file" ]; then
+    local crow=""
+    if [ "$has_jq" = 1 ]; then
+      crow=$(sed '1s/^\xef\xbb\xbf//' "$cfg_file" 2>/dev/null | jq -r '
+        def names: if type=="array" then (map(tostring|gsub(",";" "))|join(",")) else "__absent__" end;
+        [ (.line1|names), (.line2|names),
+          (.bar_width // 20|tostring), (.bar_filled // "█"), (.bar_empty // "░"),
+          (if has("separator") then (.separator|tostring) else "__absent__" end),
+          (if .colors == false then "0" else "1" end)
+        ] | map(gsub("[\u0000-\u001F\u007F]"; " ")) | join("\u001f")' 2>/dev/null)
+    else
+      crow=$(python3 -c '
+import json, sys, re
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+except Exception:
+    d = {}
+def names(v):
+    return ",".join(str(x).replace(",", " ") for x in v) if isinstance(v, list) else "__absent__"
+row = [names(d.get("line1")), names(d.get("line2")),
+       str(d.get("bar_width") or 20), str(d.get("bar_filled") or "█"), str(d.get("bar_empty") or "░"),
+       (str(d.get("separator")) if "separator" in d and d.get("separator") is not None else "__absent__"),
+       "0" if d.get("colors") is False else "1"]
+print("\x1f".join(re.sub(r"[\x00-\x1f\x7f]", " ", x) for x in row))' "$cfg_file" 2>/dev/null)
+    fi
+    if [ -n "$crow" ]; then
+      local c1 c2 cb cf ce cs cc
+      IFS=$'\x1f' read -r c1 c2 cb cf ce cs cc <<< "$crow"
+      # «__absent__» = ключа нет (оставляем дефолт); пустая строка = ключ задан
+      # ПУСТЫМ списком — уважаем: строка отключена намеренно.
+      [ "$c1" != "__absent__" ] && cfg_l1="$c1"
+      [ "$c2" != "__absent__" ] && cfg_l2="$c2"
+      case "$cb" in *[!0-9]*|''|0*) : ;; *) [ "$cb" -ge 5 ] && [ "$cb" -le 60 ] && cfg_bw="$cb" ;; esac
+      [ -n "$cf" ] && cfg_bf="$cf"
+      [ -n "$ce" ] && cfg_be="$ce"
+      [ "$cs" != "__absent__" ] && cfg_sep="$cs"
+      [ "$cc" = "0" ] && cfg_colors=0
+    fi
+  fi
+
   local C_RST=$'\033[0m' C_DIM=$'\033[2m' C_LBL=$'\033[1;36m' C_VAL=$'\033[36m'
   local C_GRN=$'\033[32m' C_YLW=$'\033[33m' C_RED=$'\033[31m' C_BLU=$'\033[1;34m'
-  local SEP="${C_DIM} | ${C_RST}"
+  if [ "$cfg_colors" = 0 ]; then
+    C_RST=""; C_DIM=""; C_LBL=""; C_VAL=""; C_GRN=""; C_YLW=""; C_RED=""; C_BLU=""
+  fi
+  local SEP="${C_DIM}${cfg_sep}${C_RST}"
 
-  # Ветка git и счётчик строк сессии (+N,-N из cost.*)
-  local branch="" branch_seg=""
+  # Числа контекста (валидность pct/window уже проверена выше; null → сегмент пуст)
+  local ctx_ok=1 pct_int=0 tokens_int=0 tokens_k=0 win_label="" filled=0 bar="" zone=""
+  if [ "${pct_raw:-null}" = "null" ] || [ "${window_raw:-null}" = "null" ]; then
+    ctx_ok=0
+  else
+    pct_int=$(printf '%s' "$pct_raw" | cut -d. -f1); [ -z "$pct_int" ] && pct_int=0
+    pct_int=$(( 10#$pct_int ))
+    tokens_int=$(printf '%s' "${tokens_raw:-0}" | cut -d. -f1); [ -z "$tokens_int" ] && tokens_int=0
+    tokens_int=$(( 10#$tokens_int ))
+    tokens_k=$(( tokens_int / 1000 ))
+    case "$window_raw" in
+      1000000) win_label="1.0M" ;;
+      200000)  win_label="200k" ;;
+      *) win_label=$(awk -v w="$window_raw" 'BEGIN{ if (w>=1000000) printf "%.1fM", w/1000000; else printf "%dk", int(w/1000) }') ;;
+    esac
+    # Границы цветовых зон — из порогов ПРОЕКТА (.agents/context-budget.json в cwd),
+    # чтобы бар краснел там же, где guard шлёт директивы; нет конфига — 60/80.
+    local z1=60 z2=80 zrow=""
+    if [ -n "${cwd_in:-}" ] && [ -f "$cwd_in/.agents/context-budget.json" ] && [ -r "$cwd_in/.agents/context-budget.json" ]; then
+      if [ "$has_jq" = 1 ]; then
+        zrow=$(jq -r 'if (.thresholds|type)=="array" and (.thresholds|length)==3 and ((.thresholds|map(type))|all(.=="number")) then "\(.thresholds[0]|floor) \(.thresholds[1]|floor)" else "" end' "$cwd_in/.agents/context-budget.json" 2>/dev/null)
+      else
+        zrow=$(python3 -c '
+import json, sys
+try:
+    tt = json.load(open(sys.argv[1])).get("thresholds")
+    assert isinstance(tt, list) and len(tt) == 3
+    print(int(float(tt[0])), int(float(tt[1])))
+except Exception:
+    print("")' "$cwd_in/.agents/context-budget.json" 2>/dev/null)
+      fi
+      if [ -n "$zrow" ]; then
+        set -- $zrow
+        case "${1:-}" in *[!0-9]*|'') : ;; *) z1="$1" ;; esac
+        case "${2:-}" in *[!0-9]*|'') : ;; *) z2="$2" ;; esac
+      fi
+    fi
+    filled=$(( pct_int * cfg_bw / 100 )); [ "$filled" -gt "$cfg_bw" ] && filled="$cfg_bw"; [ "$filled" -lt 0 ] && filled=0
+    bar=$(PF_BF="$cfg_bf" PF_BE="$cfg_be" awk -v f="$filled" -v w="$cfg_bw" 'BEGIN{bf=ENVIRON["PF_BF"]; be=ENVIRON["PF_BE"]; for(i=1;i<=w;i++) printf "%s", (i<=f ? bf : be)}')
+    if [ "$pct_int" -ge "$z2" ]; then zone="$C_RED"
+    elif [ "$pct_int" -ge "$z1" ]; then zone="$C_YLW"
+    else zone="$C_GRN"; fi
+  fi
+
+  # Ветка git и счётчик строк сессии
+  local branch=""
   if [ -n "${cwd_in:-}" ] && [ -d "${cwd_in:-/nonexistent}" ]; then
     branch=$(git -C "$cwd_in" symbolic-ref --short HEAD 2>/dev/null | tr -d '\000-\037\177')
   fi
   case "${lines_add:-}" in ''|null|*[!0-9]*) lines_add=0 ;; esac
   case "${lines_del:-}" in ''|null|*[!0-9]*) lines_del=0 ;; esac
-  if [ -n "$branch" ]; then
-    branch_seg="${SEP}${C_YLW}⎇ ${branch}${C_RST}(${C_GRN}+${lines_add}${C_RST},${C_RED}-${lines_del}${C_RST})"
-  fi
 
-  # Строка 2: лимиты подписки (5-часовое окно и неделя) — если платформа их дала.
-  local line2="" s5 s7
-  if [ "${five_pct:-null}" != "null" ]; then
-    s5=$(awk -v v="$five_pct" 'BEGIN{printf "%.1f", v+0}')
-    line2="${C_BLU}Session:${C_RST} ${s5}%"
-    if [ "${five_reset:-null}" != "null" ]; then
-      line2="${line2}${SEP}${C_BLU}Reset:${C_RST} $(fmt_reset "$five_reset")"
-    fi
-  fi
-  if [ "${seven_pct:-null}" != "null" ]; then
-    s7=$(awk -v v="$seven_pct" 'BEGIN{printf "%.1f", v+0}')
-    [ -n "$line2" ] && line2="${line2}${SEP}"
-    line2="${line2}${C_BLU}Weekly:${C_RST} ${s7}%"
-    if [ "${seven_reset:-null}" != "null" ]; then
-      line2="${line2}${SEP}${C_BLU}Weekly Reset:${C_RST} $(fmt_reset "$seven_reset")"
-    fi
-  fi
+  # Виджеты. Каждый печатает свой текст или ничего (данных нет — сегмент исчезает).
+  seg_model()   { [ -n "${model_name:-}" ] && printf '%s' "${C_LBL}Model:${C_RST} ${C_VAL}${model_name}${C_RST}"; }
+  seg_context() { [ "$ctx_ok" = 1 ] && printf '%s' "${C_LBL}Context:${C_RST} ${zone}[${bar}]${C_RST} ${tokens_k}k/${win_label} (${zone}${pct_int}%${C_RST})"; }
+  seg_branch()  { [ -n "$branch" ] && printf '%s' "${C_YLW}⎇ ${branch}${C_RST}(${C_GRN}+${lines_add}${C_RST},${C_RED}-${lines_del}${C_RST})"; }
+  seg_session() {
+    [ "${five_pct:-null}" = "null" ] && return 0
+    local s; s=$(awk -v v="$five_pct" 'BEGIN{printf "%.1f", v+0}')
+    printf '%s' "${C_BLU}Session:${C_RST} ${s}%"
+    [ "${five_reset:-null}" != "null" ] && printf '%s' "${SEP}${C_BLU}Reset:${C_RST} $(fmt_reset "$five_reset")"
+  }
+  seg_weekly() {
+    [ "${seven_pct:-null}" = "null" ] && return 0
+    local s; s=$(awk -v v="$seven_pct" 'BEGIN{printf "%.1f", v+0}')
+    printf '%s' "${C_BLU}Weekly:${C_RST} ${s}%"
+    [ "${seven_reset:-null}" != "null" ] && printf '%s' "${SEP}${C_BLU}Weekly Reset:${C_RST} $(fmt_reset "$seven_reset")"
+  }
+  seg_cost() {
+    case "${cost_usd:-null}" in null|''|*[!0-9.]*) return 0 ;; esac
+    printf '%s' "${C_BLU}Cost:${C_RST} \$$(awk -v v="$cost_usd" 'BEGIN{printf "%.2f", v+0}')"
+  }
+  seg_duration() {
+    case "${dur_ms:-null}" in null|''|*[!0-9.]*) return 0 ;; esac
+    local d_int="${dur_ms%%.*}"; [ -z "$d_int" ] && return 0
+    [ "${#d_int}" -gt 12 ] && return 0
+    local secs; secs=$(( 10#$d_int / 1000 ))
+    local h=$(( secs / 3600 )) m=$(( (secs % 3600) / 60 ))
+    if [ "$h" -gt 0 ]; then printf '%s' "${C_BLU}Time:${C_RST} ${h}hr ${m}m"; else printf '%s' "${C_BLU}Time:${C_RST} ${m}m"; fi
+  }
 
-  # context_window отсутствует/null — печатаем без Context-сегмента, state не пишем.
-  if [ "${pct_raw:-null}" = "null" ] || [ "${window_raw:-null}" = "null" ]; then
-    printf '%s\n' "${C_LBL}Model:${C_RST} ${C_VAL}${model_name:-?}${C_RST}${branch_seg}"
-    [ -n "$line2" ] && printf '%s\n' "$line2"
-    return 0
-  fi
+  # Сборка строки из списка имён виджетов (белый список; неизвестные — молча мимо).
+  build_line() {
+    local names="$1" out="" seg="" n
+    local IFS=','
+    set -f
+    for n in $names; do
+      case "$n" in
+        model) seg=$(seg_model) ;;
+        context) seg=$(seg_context) ;;
+        branch) seg=$(seg_branch) ;;
+        session) seg=$(seg_session) ;;
+        weekly) seg=$(seg_weekly) ;;
+        cost) seg=$(seg_cost) ;;
+        duration) seg=$(seg_duration) ;;
+        *) seg="" ;;
+      esac
+      if [ -n "$seg" ]; then
+        if [ -n "$out" ]; then out="${out}${SEP}${seg}"; else out="$seg"; fi
+      fi
+    done
+    set +f
+    printf '%s' "$out"
+  }
 
-  local pct_int tokens_int tokens_k win_label filled bar zone
-  pct_int=$(printf '%s' "$pct_raw" | cut -d. -f1)
-  [ -z "$pct_int" ] && pct_int=0
-  tokens_int=$(printf '%s' "${tokens_raw:-0}" | cut -d. -f1)
-  [ -z "$tokens_int" ] && tokens_int=0
-  tokens_k=$(( tokens_int / 1000 ))
-
-  case "$window_raw" in
-    1000000) win_label="1.0M" ;;
-    200000)  win_label="200k" ;;
-    *) win_label=$(awk -v w="$window_raw" 'BEGIN{ if (w>=1000000) printf "%.1fM", w/1000000; else printf "%dk", int(w/1000) }') ;;
-  esac
-
-  # Прогресс-бар 20 ячеек; цвет зоны согласован с порогами §13 (60/80).
-  filled=$(( pct_int / 5 )); [ "$filled" -gt 20 ] && filled=20; [ "$filled" -lt 0 ] && filled=0
-  bar=$(awk -v f="$filled" 'BEGIN{for(i=1;i<=20;i++) printf (i<=f ? "█" : "░")}')
-  if [ "$pct_int" -ge 80 ]; then zone="$C_RED"
-  elif [ "$pct_int" -ge 60 ]; then zone="$C_YLW"
-  else zone="$C_GRN"; fi
-
-  printf '%s\n' "${C_LBL}Model:${C_RST} ${C_VAL}${model_name:-?}${C_RST}${SEP}${C_LBL}Context:${C_RST} ${zone}[${bar}]${C_RST} ${tokens_k}k/${win_label} (${zone}${pct_int}%${C_RST})${branch_seg}"
+  local line1 line2
+  line1=$(build_line "$cfg_l1")
+  line2=$(build_line "$cfg_l2")
+  [ -n "$line1" ] && printf '%s\n' "$line1"
   [ -n "$line2" ] && printf '%s\n' "$line2"
+  [ "$ctx_ok" = 0 ] && return 0
 
   [ -z "$session_id" ] && return 0
   # session_id — только безопасные символы: он становится именем файла.

@@ -57,7 +57,25 @@ Per-project thresholds — `<project>/.agents/context-budget.json`:
 {"thresholds": [50, 70, 85]}
 ```
 
-Exactly three integers in ascending order (1–99). Zone meanings stay the same: zone 1 — checkpoint, delegate big chunks; zone 2 — no new medium/large chunks; zone 3 — full handoff immediately. Missing or invalid file → defaults 60/80/90.
+Exactly three integers in ascending order (1–99). Zone meanings stay the same: zone 1 — checkpoint, delegate big chunks; zone 2 — no new medium/large chunks; zone 3 — full handoff immediately. Missing or invalid file → defaults 60/80/90. The status-bar colour follows the same project thresholds.
+
+Status bar look & widgets — `~/.config/pf-handoff/statusline.json` (optional; without it the default look is used):
+
+```json
+{
+  "line1": ["model", "context", "branch"],
+  "line2": ["session", "weekly"],
+  "bar_width": 20,
+  "bar_filled": "█",
+  "bar_empty": "░",
+  "separator": " | ",
+  "colors": true
+}
+```
+
+- Widgets: `model`, `context` (bar + tokens/window + %), `branch` (git branch with session +/− line counts), `session` (5-hour limit % + Reset), `weekly` (weekly % + Weekly Reset), `cost` (session USD), `duration` (session time). Unknown names are silently skipped; a widget with no data disappears by itself.
+- An **absent** `line1`/`line2` key keeps the default; an **explicitly empty** array (`"line2": []`) disables that line.
+- `bar_width` accepts 5–60; `colors: false` renders plain text (no ANSI).
 
 ## Good to know
 

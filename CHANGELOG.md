@@ -4,6 +4,11 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.6.0 — 2026-08-10
+
+- **Configurable status bar** — `~/.config/pf-handoff/statusline.json` (optional; defaults reproduce v1.5.0 exactly): `line1`/`line2` widget layout from a whitelist (`model`, `context`, `branch`, `session`, `weekly`, plus new `cost` and `duration`), `bar_width` (5–60), `bar_filled`/`bar_empty`, `separator` (empty string honoured), `colors: false` for plain text. An absent `line1`/`line2` key keeps the default; an explicitly empty array disables that line. Bar zone colours follow the *project* thresholds from `.agents/context-budget.json`. Full reference in both READMEs.
+- Hardened by independent QA round #2 (80 checks; findings fixed before the tag, per the release rule): octal-looking numbers ("08") no longer blank the render or drop state; user bar characters go through `ENVIRON` (no awk escape/format interpretation); FIFO configs can't hang any hook (regular-file checks everywhere); comma-in-name whitelist bypass closed; widget-name globbing disabled; BOM configs parse identically in jq and python3 branches; absurd `duration` values hide the widget instead of showing negatives; fractional project thresholds floor consistently in both engines.
+
 ## v1.5.0 — 2026-08-10
 
 - **Rich two-line status bar** (ccstatusline-style, still zero dependencies — pure bash/awk): context progress bar with zone colours matching the §13 thresholds, tokens/window, git branch with session line counts, and a second line with subscription rate limits — `Session % | Reset | Weekly % | Weekly Reset`. Segments degrade gracefully when a field is absent; the Orca passthrough and the state-file sensor are unchanged.

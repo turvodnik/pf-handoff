@@ -66,7 +66,7 @@ print("\x1f".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") 
   # (ровно три целых 1–99 по возрастанию; иначе — молча дефолт).
   local t1=60 t2=80 t3=90
   local cfg="$cwd_in/.agents/context-budget.json"
-  if [ -n "$cwd_in" ] && [ -r "$cfg" ]; then
+  if [ -n "$cwd_in" ] && [ -f "$cfg" ] && [ -r "$cfg" ]; then
     local trow=""
     if [ "$has_jq" = 1 ]; then
       trow=$(jq -r 'if (.thresholds|type)=="array" and (.thresholds|length)==3 then (.thresholds|map(tostring)|join("\t")) else "" end' "$cfg" 2>/dev/null)
