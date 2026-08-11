@@ -1,20 +1,22 @@
 ---
 name: pf-resume
-description: Подхват работы по живому HANDOFF-файлу (§13) — продолжить в новом чате или после /clear так, будто это тот же чат. Use when «/pf-resume», «продолжи с прошлой сессии», «подхвати работу», «восстанови состояние», resume previous session state.
+description: Picking up work from the live HANDOFF file (§13) — continue in a new chat or after /clear as if it were the same chat. Use when «/pf-resume», «продолжи с прошлой сессии», «подхвати работу», «восстанови состояние», resume previous session state.
 ---
 
-# pf-resume — продолжить, как будто чат тот же
+# pf-resume — continue as if the chat never ended
 
-Восстанавливает рабочее состояние из HANDOFF-файла (§13). Контекст минимален намеренно: HANDOFF + task-пакет + журнал за 3 дня. Хвост старого чата не нужен — всё существенное обязан содержать HANDOFF; чего не хватает — блокер, а не повод догадываться.
+Always communicate with the user in the user's language (Russian in the origin system). HANDOFF and status formats stay as specified.
 
-## Шаги
+Restores working state from the HANDOFF file (§13). The context is minimal by design: HANDOFF + task packet + 3 days of journal. The old chat's tail is not needed — the HANDOFF must contain everything essential; anything missing is a blocker, not a license to guess. Full context-budget rules (window thresholds, HANDOFF format, subagent swarms) — `../pf-handoff/references/context-rules.md` next to this skill; read it when working with swarms or planning large chunks.
 
-1. Найди HANDOFF: по аргументу-slug (если он `closed` — переоткрой, вернув `status: active`: возврат к прежней задаче легален), иначе самый свежий `status: active` в `.agents/runtime/handoff/` проекта. Активных нет — так и скажи и предложи старт по §8 (журнал + пакеты); это не ошибка.
-2. Прочитай HANDOFF целиком; если заполнено `task:` — прочитай task-пакет; журнал за 3 дня — по заголовкам, детали по необходимости.
-3. HANDOFF старше 7 дней или противоречит статусам пакетов/журналу — не продолжай молча: перечисли расхождения человеку одним сообщением и дождись ответа. Его `task` уже в done/cancelled — закрой файл сам (`status: closed`) и скажи об этом одной строкой: мусор в сессии не нужен.
-4. Скажи человеку две строки: «Продолжаю: <цель>. Следующий шаг: <из HANDOFF>» — и работай. Раздел «Не делать» соблюдай строго: это отменённые направления, не предлагай их заново.
-5. На первой же вехе или пороге §13 перезапиши HANDOFF через pf-handoff — он снова живой.
+## Steps
 
-## Запрещено
+1. Find the HANDOFF: by the slug argument (if it is `closed` — reopen it by returning `status: active`: coming back to a former task is legitimate), otherwise the freshest `status: active` in the project's `.agents/runtime/handoff/`. None active — say so and offer the §8 start (journal + packets); that is not an error.
+2. Read the HANDOFF in full; if `task:` is filled — read the task packet; 3 days of journal — by headers, details as needed.
+3. HANDOFF older than 7 days, or contradicting packet statuses/journal — do not continue silently: list the discrepancies to the human in one message and wait. Its `task` already done/cancelled — close the file yourself (`status: closed`) and say so in one line: no litter in the session.
+4. Tell the human two lines: «Продолжаю: <цель>. Следующий шаг: <из HANDOFF>» — and work. Obey the «Не делать» section strictly: those are cancelled directions, do not re-propose them.
+5. At the first milestone or §13 threshold rewrite the HANDOFF via pf-handoff — it is live again.
 
-Запрашивать транскрипт старого чата; продолжать при расхождениях без сверки с человеком; воскрешать пункты из «Не делать»; начинать с нуля, когда есть активный HANDOFF.
+## Forbidden
+
+Requesting the old chat's transcript; continuing past discrepancies without reconciling with the human; resurrecting items from «Не делать»; starting from scratch when an active HANDOFF exists.

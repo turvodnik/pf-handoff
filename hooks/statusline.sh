@@ -45,7 +45,7 @@ run() {
   local has_jq=0
   command -v jq >/dev/null 2>&1 && has_jq=1
 
-  local row session_id pct_raw window_raw tokens_raw model_name
+  local row session_id pct_raw window_raw tokens_raw model_name effort_lvl
   local lines_add lines_del cost_usd dur_ms five_pct five_reset seven_pct seven_reset cwd_in
   if [ "$has_jq" = 1 ]; then
     row=$(printf '%s' "$input" | jq -r '
@@ -55,6 +55,7 @@ run() {
         (if (.context_window|type) == "object" then (.context_window.context_window_size // "null") else "null" end),
         (if (.context_window|type) == "object" then (.context_window.total_input_tokens // "null") else "null" end),
         (if (.model|type) == "object" then (.model.display_name // "") else "" end),
+        (if (.effort|type) == "object" then (.effort.level // "") else "" end),
         (if (.cost|type) == "object" then (.cost.total_lines_added // 0) else 0 end),
         (if (.cost|type) == "object" then (.cost.total_lines_removed // 0) else 0 end),
         (if (.cost|type) == "object" then (.cost.total_cost_usd // "null") else "null" end),
@@ -85,6 +86,7 @@ def g(src, key, default="null"):
 row = [str(d.get("session_id") or ""),
        str(g(cw, "used_percentage")), str(g(cw, "context_window_size")), str(g(cw, "total_input_tokens")),
        str(d.get("model", {}).get("display_name") or "") if isinstance(d.get("model"), dict) else "",
+       str(d.get("effort", {}).get("level") or "") if isinstance(d.get("effort"), dict) else "",
        str(g(cost, "total_lines_added", "0")), str(g(cost, "total_lines_removed", "0")),
        str(g(cost, "total_cost_usd")), str(g(cost, "total_duration_ms")),
        str(g(fh, "used_percentage")), str(g(fh, "resets_at")),
@@ -95,7 +97,9 @@ row = [re.sub(r"[\x00-\x1f\x7f]", " ", x) for x in row]
 print("\x1f".join(row))' 2>/dev/null)
   fi
 
-  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name lines_add lines_del cost_usd dur_ms five_pct five_reset seven_pct seven_reset cwd_in <<< "$row"
+  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name effort_lvl lines_add lines_del cost_usd dur_ms five_pct five_reset seven_pct seven_reset cwd_in <<< "$row"
+  # effort.level — только известные значения (поле опционально: старые CLI/модели без effort его не шлют).
+  case "${effort_lvl:-}" in low|medium|high|xhigh|max) : ;; *) effort_lvl="" ;; esac
 
   # Числовая гигиена (QA №1/№4): нечисловые used_percentage/window → «нет контекста»,
   # нечисловые tokens → 0. Иначе строка вроде "true" доходит до bash-арифметики
@@ -111,7 +115,7 @@ print("\x1f".join(row))' 2>/dev/null)
   # бар, разделитель, цвета. Нет файла или он кривой — дефолты (вид без конфига
   # идентичен v1.5.0). Env-переопределение пути — для тестов.
   local cfg_file="${PF_STATUSLINE_CONFIG:-$HOME/.config/pf-handoff/statusline.json}"
-  local cfg_l1="model,context,branch" cfg_l2="session,weekly"
+  local cfg_l1="model,effort,context,branch" cfg_l2="session,weekly"
   local cfg_bw=20 cfg_bf="█" cfg_be="░" cfg_sep=" | " cfg_colors=1
   if [ -f "$cfg_file" ] && [ -r "$cfg_file" ]; then
     local crow=""
@@ -214,6 +218,7 @@ except Exception:
 
   # Виджеты. Каждый печатает свой текст или ничего (данных нет — сегмент исчезает).
   seg_model()   { [ -n "${model_name:-}" ] && printf '%s' "${C_LBL}Model:${C_RST} ${C_VAL}${model_name}${C_RST}"; }
+  seg_effort()  { [ -n "${effort_lvl:-}" ] && printf '%s' "${C_LBL}Effort:${C_RST} ${C_VAL}${effort_lvl}${C_RST}"; }
   seg_context() { [ "$ctx_ok" = 1 ] && printf '%s' "${C_LBL}Context:${C_RST} ${zone}[${bar}]${C_RST} ${tokens_k}k/${win_label} (${zone}${pct_int}%${C_RST})"; }
   seg_branch()  { [ -n "$branch" ] && printf '%s' "${C_YLW}⎇ ${branch}${C_RST}(${C_GRN}+${lines_add}${C_RST},${C_RED}-${lines_del}${C_RST})"; }
   seg_session() {
@@ -249,6 +254,7 @@ except Exception:
     for n in $names; do
       case "$n" in
         model) seg=$(seg_model) ;;
+        effort) seg=$(seg_effort) ;;
         context) seg=$(seg_context) ;;
         branch) seg=$(seg_branch) ;;
         session) seg=$(seg_session) ;;
@@ -326,7 +332,7 @@ if [ "${1:-}" = "--preview" ]; then
   ORCA_STATUSLINE="/nonexistent-preview-skip"
   __pv_now=$(date +%s)
   __pv_dir=$(printf '%s' "$PWD" | sed 's/\\/\\\\/g; s/"/\\"/g')
-  printf '{"session_id":"","model":{"display_name":"Fable 5"},"context_window":{"used_percentage":41,"context_window_size":1000000,"total_input_tokens":410000},"cost":{"total_lines_added":12,"total_lines_removed":3,"total_cost_usd":1.23,"total_duration_ms":4500000},"rate_limits":{"five_hour":{"used_percentage":12.5,"resets_at":%s},"seven_day":{"used_percentage":42.0,"resets_at":%s}},"workspace":{"current_dir":"%s"},"cwd":"%s"}' \
+  printf '{"session_id":"","model":{"display_name":"Fable 5"},"effort":{"level":"medium"},"context_window":{"used_percentage":41,"context_window_size":1000000,"total_input_tokens":410000},"cost":{"total_lines_added":12,"total_lines_removed":3,"total_cost_usd":1.23,"total_duration_ms":4500000},"rate_limits":{"five_hour":{"used_percentage":12.5,"resets_at":%s},"seven_day":{"used_percentage":42.0,"resets_at":%s}},"workspace":{"current_dir":"%s"},"cwd":"%s"}' \
     "$(( __pv_now + 13620 ))" "$(( __pv_now + 282600 ))" "$__pv_dir" "$__pv_dir" | ( run ) 2>/dev/null
   exit 0
 fi

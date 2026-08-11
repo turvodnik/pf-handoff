@@ -12,14 +12,14 @@ A small kit — rules, two skills, and four hooks — that fixes the core pain o
 
 ## How it works (4 parts)
 
-1. **Rules** (`docs/rules-section.md` — a ready-made section for your CLAUDE.md/AGENTS.md): three memory layers, window thresholds (60/80/90% by default), "one task = one HANDOFF file", compactor instructions (what to preserve during compression), and a "what to press when" cheat sheet.
+1. **Rules** — two files, split by cost. `docs/rules-section.md` is the short section you paste into your CLAUDE.md/AGENTS.md: it loads into *every* window, so it holds only the invariants (memory layers, window thresholds 60/80/90%, the fleet registry rule, compactor instructions). [`docs/context-rules.md`](docs/context-rules.md) holds the full rules (HANDOFF format, multi-agent fleets, checkpoints, the "what to press when" cheat sheet) — the agent reads them on demand from the copy that ships with the skill (`~/.claude/skills/pf-handoff/references/context-rules.md`). The split keeps roughly 600 tokens out of every session start (measured on the English section; the Russian one saves about twice that).
 2. **HANDOFF file** — a living task-state cheat-sheet in `<project>/.agents/runtime/handoff/YYYY-MM-DD-<slug>.md`: Goal / State (proven) / Next step / Blockers / Key files & decisions / Do-not-do. Always rewritten as a whole, ≤120 lines, git-ignored.
 3. **Skills**:
    - `pf-handoff` — checkpoint or session close: verify what's proven → rewrite the cheat-sheet → statuses/journal.
    - `pf-resume` — pickup in a new chat or after `/clear`: reads the cheat-sheet and continues "as if it were the same chat". Reopens a closed file by slug; auto-closes cheat-sheets of already-finished tasks.
 4. **Hooks** (scripts Claude Code runs by itself; `hooks/` directory):
    - `statusline.sh` — a two-line rich status bar (ccstatusline-style, zero dependencies) and the sensor writing the window percentage to a state file:
-     `Model: Fable 5 | Context: [██░░░░░░░░░░░░░░░░░░] 110k/1.0M (11%) | ⎇ main(+0,-0)`
+     `Model: Fable 5 | Effort: medium | Context: [██░░░░░░░░░░░░░░░░░░] 110k/1.0M (11%) | ⎇ main(+0,-0)`
      `Session: 0.0% | Reset: 4hr 56m | Weekly: 18.0% | Weekly Reset: 4d 12hr 6m`
      The bar colour follows the zones (green < 60%, yellow 60–79%, red ≥ 80%); Session/Weekly show your subscription rate limits with time to reset; the branch segment shows lines added/removed this session. Segments degrade gracefully when data is absent. Renders in the Claude Code terminal (other CLIs have no custom-statusline hook; the desktop app doesn't render a status line — the sensor falls back to transcript parsing there).
    - `context-guard.sh` — at thresholds injects a short directive to the model ("checkpoint now", "don't start new large chunks", "full handoff immediately"). Silent otherwise. If the state file is missing it computes the percentage from the session transcript (fallback). **Subagent-aware**: a subagent's tool calls are measured against the *subagent's own* transcript and window, under its own state key — parent warnings are never consumed by subagents.
@@ -63,7 +63,7 @@ Status bar look & widgets — `~/.config/pf-handoff/statusline.json` (optional; 
 
 ```json
 {
-  "line1": ["model", "context", "branch"],
+  "line1": ["model", "effort", "context", "branch"],
   "line2": ["session", "weekly"],
   "bar_width": 20,
   "bar_filled": "█",
@@ -73,7 +73,7 @@ Status bar look & widgets — `~/.config/pf-handoff/statusline.json` (optional; 
 }
 ```
 
-- Widgets: `model`, `context` (bar + tokens/window + %), `branch` (git branch with session +/− line counts), `session` (5-hour limit % + Reset), `weekly` (weekly % + Weekly Reset), `cost` (session USD), `duration` (session time). Unknown names are silently skipped; a widget with no data disappears by itself.
+- Widgets: `model`, `effort` (the model's reasoning-effort level, when the CLI reports one), `context` (bar + tokens/window + %), `branch` (git branch with session +/− line counts), `session` (5-hour limit % + Reset), `weekly` (weekly % + Weekly Reset), `cost` (session USD), `duration` (session time). Unknown names are silently skipped; a widget with no data disappears by itself.
 - An **absent** `line1`/`line2` key keeps the default; an **explicitly empty** array (`"line2": []`) disables that line.
 - `bar_width` accepts 5–60; `colors: false` renders plain text (no ANSI).
 
@@ -91,7 +91,7 @@ bash hooks/doctor.sh                 # also validates the config and says WHY it
 - **Orca is optional**: the wrapper calls the Orca script only if it exists; on a machine without Orca everything works unchanged.
 - **Permission modes**: hooks run in every mode, including bypass permissions — the mode only affects "allow this tool?" prompts.
 - **Headless (`claude -p`)** does not run the SessionStart hook or the statusline — there the agent is guided by the rules (it looks for the cheat-sheet itself), and the guard computes the percentage from the transcript.
-- **Subagents**: each gets its own fresh window — that is the main protection for orchestrators. The guard measures each subagent against its own transcript; window size for that estimate comes from the model configured in settings.json, so if a subagent runs a different model (e.g. Haiku with 200k) the estimate is approximate. Rule from `docs/rules-section.md`: a subagent writes its **full** result to a file (nothing is lost — essential for focus groups and research), and returns only a short summary to the parent chat. For large fleets (dozens of agents), checkpoint a registry — "agent → task → result file" — into the HANDOFF *before* launching the wave: even if the orchestrator's window compacts mid-flight, it still knows exactly what it is waiting for. Verified to work at **any nesting depth** (children, grandchildren, …): every level gets its own agent id and a flat transcript in the session's `subagents/` directory, so the guard measures each one individually — with a `find`-based fallback in case the directory layout ever changes.
+- **Subagents**: each gets its own fresh window — that is the main protection for orchestrators. The guard measures each subagent against its own transcript; window size for that estimate comes from the model configured in settings.json, so if a subagent runs a different model (e.g. Haiku with 200k) the estimate is approximate. Rule from `docs/context-rules.md`: a subagent writes its **full** result to a file (nothing is lost — essential for focus groups and research), and returns only a short summary to the parent chat. For large fleets (dozens of agents), checkpoint a registry — "agent → task → result file" — into the HANDOFF *before* launching the wave: even if the orchestrator's window compacts mid-flight, it still knows exactly what it is waiting for. Verified to work at **any nesting depth** (children, grandchildren, …): every level gets its own agent id and a flat transcript in the session's `subagents/` directory, so the guard measures each one individually — with a `find`-based fallback in case the directory layout ever changes.
 - **Honest limitation**: the compact summary plus the cheat-sheet preserve the working state (goal, decisions, next step, cancelled directions) — not a verbatim memory of the whole chat. Verbatim history lives in the session transcript and the project journal.
 
 ## "What to press when"

@@ -1,5 +1,5 @@
 {
-  "line1": ["model", "context", "branch"],
+  "line1": ["model", "effort", "context", "branch"],
   "line2": ["session", "weekly"],
   "bar_width": 20,
   "bar_filled": "█",
