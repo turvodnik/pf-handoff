@@ -88,4 +88,17 @@ else
   fail "$STATE_DIR не удалось создать"
 fi
 
+# 6) конфиг статус-строки (опциональный): существует, но кривой — единственный
+# случай, когда пользователь молча получает дефолты и не понимает почему.
+SL_CFG="${PF_STATUSLINE_CONFIG:-$HOME/.config/pf-handoff/statusline.json}"
+if [ -e "$SL_CFG" ]; then
+  if [ -f "$SL_CFG" ] && python3 -m json.tool "$SL_CFG" > /dev/null 2>&1; then
+    ok "конфиг статус-строки валиден ($SL_CFG)"
+  else
+    fail "конфиг статус-строки существует, но не парсится как JSON — statusline молча использует дефолты; проверьте синтаксис: python3 -m json.tool '$SL_CFG'"
+  fi
+else
+  ok "конфиг статус-строки отсутствует — дефолтный вид (это норма)"
+fi
+
 exit "$FAIL"

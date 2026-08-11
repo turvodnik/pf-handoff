@@ -77,6 +77,14 @@ Status bar look & widgets — `~/.config/pf-handoff/statusline.json` (optional; 
 - An **absent** `line1`/`line2` key keeps the default; an **explicitly empty** array (`"line2": []`) disables that line.
 - `bar_width` accepts 5–60; `colors: false` renders plain text (no ANSI).
 
+Quick start & feedback loop:
+
+```bash
+mkdir -p ~/.config/pf-handoff && cp examples/statusline.json ~/.config/pf-handoff/
+bash hooks/statusline.sh --preview   # instant render with sample data — edit the config and re-run
+bash hooks/doctor.sh                 # also validates the config and says WHY it would be ignored
+```
+
 ## Good to know
 
 - **Your existing statusline**: `install.sh` replaces the status-line command with its own (the old one is kept in the backup). If you already run a custom statusline script, look inside `hooks/statusline.sh` and call yours from there, following the Orca-call pattern.

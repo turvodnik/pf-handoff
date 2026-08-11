@@ -319,5 +319,17 @@ print(json.dumps({"pct": int(pct), "window": int(window), "input_tokens": int(to
   return 0
 }
 
+# Предпросмотр: bash statusline.sh --preview — рендер с примерными данными
+# (реальная ветка из текущего каталога), без Orca-телеметрии и без записи state
+# (пустой session_id). Меняешь конфиг → сразу видишь результат.
+if [ "${1:-}" = "--preview" ]; then
+  ORCA_STATUSLINE="/nonexistent-preview-skip"
+  __pv_now=$(date +%s)
+  __pv_dir=$(printf '%s' "$PWD" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  printf '{"session_id":"","model":{"display_name":"Fable 5"},"context_window":{"used_percentage":41,"context_window_size":1000000,"total_input_tokens":410000},"cost":{"total_lines_added":12,"total_lines_removed":3,"total_cost_usd":1.23,"total_duration_ms":4500000},"rate_limits":{"five_hour":{"used_percentage":12.5,"resets_at":%s},"seven_day":{"used_percentage":42.0,"resets_at":%s}},"workspace":{"current_dir":"%s"},"cwd":"%s"}' \
+    "$(( __pv_now + 13620 ))" "$(( __pv_now + 282600 ))" "$__pv_dir" "$__pv_dir" | ( run ) 2>/dev/null
+  exit 0
+fi
+
 ( run ) 2>/dev/null
 exit 0

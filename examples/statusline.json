@@ -1,0 +1,9 @@
+{
+  "line1": ["model", "context", "branch"],
+  "line2": ["session", "weekly"],
+  "bar_width": 20,
+  "bar_filled": "█",
+  "bar_empty": "░",
+  "separator": " | ",
+  "colors": true
+}

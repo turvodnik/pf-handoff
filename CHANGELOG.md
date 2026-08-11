@@ -4,6 +4,15 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.6.1 — 2026-08-11
+
+Config DX (the "middle ground" instead of a TUI configurator):
+
+- `bash hooks/statusline.sh --preview` — instant two-line render with sample data (and your real git branch): edit the config, re-run, see the result; no Orca calls, no state writes.
+- `hooks/doctor.sh` now validates the status-bar config: a present-but-broken JSON is a loud FAIL with a diagnostic hint — no more silent fallback mystery; absent config is an explicit OK.
+- `examples/statusline.json` — a copy-ready config reproducing the default look; quick-start block in both READMEs.
+- Independent mini-QA before the tag: 24/24 checks passed, no findings.
+
 ## v1.6.0 — 2026-08-10
 
 - **Configurable status bar** — `~/.config/pf-handoff/statusline.json` (optional; defaults reproduce v1.5.0 exactly): `line1`/`line2` widget layout from a whitelist (`model`, `context`, `branch`, `session`, `weekly`, plus new `cost` and `duration`), `bar_width` (5–60), `bar_filled`/`bar_empty`, `separator` (empty string honoured), `colors: false` for plain text. An absent `line1`/`line2` key keeps the default; an explicitly empty array disables that line. Bar zone colours follow the *project* thresholds from `.agents/context-budget.json`. Full reference in both READMEs.
