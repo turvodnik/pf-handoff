@@ -4,6 +4,14 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.6.2 — 2026-08-11
+
+Skill-contract fix after a live field report (a fresh empty session ran `/pf-handoff` and silently rewrote the initiative's active HANDOFF, folding in full retellings of tasks already closed in the journal):
+
+- `pf-handoff` step 1: a session that did no work and finds an active HANDOFF belonging to another task/session must NOT rewrite it — report what was found and ask first (§13: the owner writes, others read).
+- "Forbidden" gains: no retelling of tasks already closed in the journal — the journal is the source; the HANDOFF gets one line with a reference at most.
+- Verified behaviourally: a fresh agent given the exact field scenario now quotes the guard clause, declines the rewrite, and keeps closed tasks to one line.
+
 ## v1.6.1 — 2026-08-11
 
 Config DX (the "middle ground" instead of a TUI configurator):
