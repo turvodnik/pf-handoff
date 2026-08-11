@@ -1,20 +1,20 @@
 #!/bin/bash
-# Идемпотентная установка наших хуков в settings.json Claude Code, рядом с
-# существующими записями Orca (их не трогаем — только читаем и добавляем свои).
+# Idempotent install of our hooks into Claude Code's settings.json, alongside
+# any existing Orca entries (never touched — only read; we add our own).
 #
-# В отличие от четырёх hook-скриптов, это оператор-инструмент (не вызывается
-# автоматически Claude Code), поэтому ошибки — это exit 1 с сообщением в
-# stderr, а не молчаливый exit 0.
+# Unlike the four hook scripts, this is an operator tool (not invoked by
+# Claude Code automatically), so errors are exit 1 with a message on stderr,
+# not a silent exit 0.
 set -u
 
 SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-# settings.json бывает симлинком (dotfiles-репозитории): работаем с целью,
-# иначе mv заменил бы симлинк обычным файлом, а цель осталась бы старой.
+# settings.json may be a symlink (dotfiles repos): work with its target,
+# otherwise mv would replace the symlink with a plain file, leaving the target stale.
 if [ -L "$SETTINGS_PATH" ]; then
   SETTINGS_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$SETTINGS_PATH")"
-  echo "install.sh: settings.json — симлинк, работаю с его целью: $SETTINGS_PATH"
+  echo "install.sh: settings.json is a symlink, working with its target: $SETTINGS_PATH"
 fi
 
 STATUSLINE_SH="$SCRIPT_DIR/statusline.sh"
@@ -24,26 +24,26 @@ PRECOMPACT_SH="$SCRIPT_DIR/precompact.sh"
 
 for f in "$STATUSLINE_SH" "$CONTEXT_GUARD_SH" "$SESSIONSTART_SH" "$PRECOMPACT_SH"; do
   if [ ! -x "$f" ]; then
-    echo "install.sh: ожидаемый скрипт не найден или не исполняем: $f" >&2
+    echo "install.sh: expected script missing or not executable: $f" >&2
     exit 1
   fi
 done
 
 if [ ! -f "$SETTINGS_PATH" ]; then
-  # Свежая машина: Claude Code ещё не создал settings.json — создаём минимальный
-  # и продолжаем (иначе установка «из коробки» невозможна).
+  # Fresh machine: Claude Code has not created settings.json yet — create a
+  # minimal one and continue (an out-of-the-box install is impossible otherwise).
   mkdir -p "$(dirname "$SETTINGS_PATH")"
   printf '{}\n' > "$SETTINGS_PATH"
-  echo "install.sh: settings.json не найден — создан новый пустой: $SETTINGS_PATH"
+  echo "install.sh: settings.json not found — created a new empty one: $SETTINGS_PATH"
 fi
 
 if ! python3 -m json.tool "$SETTINGS_PATH" > /dev/null 2>&1; then
-  echo "install.sh: исходный $SETTINGS_PATH — невалидный JSON, установка отменена" >&2
+  echo "install.sh: original $SETTINGS_PATH is invalid JSON, install aborted" >&2
   exit 1
 fi
 
-# Защитная обёртка "по образцу орковской": существует/читаем/исполняем — иначе
-# тихий сток stdin (та же структура, что уже используется в settings.json).
+# Guard wrapper "after the Orca pattern": exists/readable/executable — otherwise
+# silently drain stdin (same structure already used in settings.json).
 wrap() {
   local script="$1"
   printf "if [ -f '%s' ] && [ -r '%s' ] && [ -x '%s' ]; then /bin/sh '%s'; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi" \
@@ -58,7 +58,7 @@ PC_CMD="$(wrap "$PRECOMPACT_SH")"
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_PATH="${SETTINGS_PATH}.bak-${TS}"
 cp "$SETTINGS_PATH" "$BACKUP_PATH"
-echo "install.sh: бэкап создан: $BACKUP_PATH"
+echo "install.sh: backup created: $BACKUP_PATH"
 
 BEFORE_ORCA_COUNT=$(grep -c 'orca/agent-hooks' "$SETTINGS_PATH" 2>/dev/null); BEFORE_ORCA_COUNT=${BEFORE_ORCA_COUNT:-0}
 
@@ -106,9 +106,9 @@ def add_if_missing(d, evt, marker, entry):
                 return
     arr.append(entry)
 
-# Маркеры — по имени файла, а не по имени каталога: в каноне _tools скрипты
-# лежат в context-hooks/, в публичном дистрибутиве — в hooks/. Маркер с
-# каталогом ломал идемпотентность и doctor у внешних пользователей.
+# Markers match the file name, not the directory: the _tools canon keeps the
+# scripts in context-hooks/, the public distribution — in hooks/. A directory-
+# qualified marker broke idempotency and doctor for external users.
 d["statusLine"] = {"type": "command", "command": sl_cmd}
 add_if_missing(d, "UserPromptSubmit", "/context-guard.sh",
     {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd, "timeout": 10}]})
@@ -127,13 +127,13 @@ PYEOF
 fi
 
 if [ "$merge_ok" != 1 ] || [ ! -s "$TMP_OUT" ]; then
-  echo "install.sh: слияние JSON не удалось, изменения не применены" >&2
+  echo "install.sh: JSON merge failed, no changes applied" >&2
   rm -f "$TMP_OUT"
   exit 1
 fi
 
 if ! python3 -m json.tool "$TMP_OUT" > /dev/null 2>&1; then
-  echo "install.sh: результат слияния — невалидный JSON, восстанавливаю бэкап" >&2
+  echo "install.sh: merge produced invalid JSON, restoring the backup" >&2
   cp "$BACKUP_PATH" "$SETTINGS_PATH"
   rm -f "$TMP_OUT"
   exit 1
@@ -143,6 +143,6 @@ mv "$TMP_OUT" "$SETTINGS_PATH"
 
 AFTER_ORCA_COUNT=$(grep -c 'orca/agent-hooks' "$SETTINGS_PATH" 2>/dev/null); AFTER_ORCA_COUNT=${AFTER_ORCA_COUNT:-0}
 
-echo "install.sh: готово. $SETTINGS_PATH обновлён (jq=$has_jq)."
-echo "install.sh: grep -c 'orca/agent-hooks': до=$BEFORE_ORCA_COUNT, после=$AFTER_ORCA_COUNT"
+echo "install.sh: done. $SETTINGS_PATH updated (jq=$has_jq)."
+echo "install.sh: grep -c 'orca/agent-hooks': before=$BEFORE_ORCA_COUNT, after=$AFTER_ORCA_COUNT"
 exit 0

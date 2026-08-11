@@ -1,29 +1,29 @@
 #!/bin/bash
-# pf-handoff: полная установка одной командой — скиллы (копиями) + хуки + проверка.
-# One-command install: skills (as copies) + hooks + health check.
-# Копии не зависят от расположения клона: после установки его можно перемещать
-# или удалять. Обновление: git pull && bash install.sh
+# pf-handoff: one-command install — skills (as copies) + hooks + health check.
+# Copies do not depend on the clone location: after installing you may move
+# or delete the clone. Update: git pull && bash install.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-echo "== pf-handoff: установка =="
+echo "== pf-handoff: install =="
 
-# 1) Скиллы — копиями, не симлинками.
+# 1) Skills — as copies, not symlinks.
 install_skill_into() {
   local surface="$1" sk="$2"
   local dst="$surface/$sk"
   if [ -L "$dst" ]; then
-    echo "ПРОПУСК: $dst — симлинк (управляется другим механизмом; снимите его вручную, если хотите копию)"
+    echo "SKIP: $dst is a symlink (managed by another mechanism; remove it manually if you want a copy)"
     return 0
   fi
   if [ -d "$dst" ]; then
-    # Сносим только СВОЮ прежнюю копию (SKILL.md с нашим именем) — чужую
-    # одноимённую папку не трогаем: молчаливый rm -rf чужих данных недопустим.
+    # Remove only OUR previous copy (SKILL.md carries our name) — a foreign
+    # same-named directory is left alone: silently rm -rf'ing other people's
+    # data is unacceptable.
     if grep -q "^name: $sk\$" "$dst/SKILL.md" 2>/dev/null; then
       rm -rf "$dst"
-      echo "обновляю: $dst"
+      echo "updating: $dst"
     else
-      echo "ПРОПУСК: $dst — существующая папка не похожа на наш скилл (нет «name: $sk» в SKILL.md); разберитесь вручную"
+      echo "SKIP: $dst — existing directory does not look like our skill (no \"name: $sk\" in SKILL.md); resolve manually"
       return 0
     fi
   fi
@@ -34,17 +34,17 @@ install_skill_into() {
 
 for sk in pf-handoff pf-resume; do
   install_skill_into "$HOME/.claude/skills" "$sk"
-  # Codex/Gemini — только если эти CLI есть на машине: мусорных папок не создаём.
+  # Codex/Gemini — only if those CLIs exist on this machine: no junk directories.
   if [ -d "$HOME/.codex" ]; then install_skill_into "$HOME/.codex/skills" "$sk"; fi
   if [ -d "$HOME/.gemini" ]; then install_skill_into "$HOME/.gemini/skills" "$sk"; fi
 done
 
-# 2) Хуки (бэкап settings.json — автоматически; отсутствующий settings.json создаётся).
+# 2) Hooks (settings.json is backed up automatically; a missing settings.json is created).
 bash "$HERE/hooks/install.sh"
 
-# 3) Проверка здоровья.
+# 3) Health check.
 bash "$HERE/hooks/doctor.sh"
 
 echo
-echo "Готово. Последний шаг руками: вставьте docs/rules-section.md (EN) или docs/rules-section.ru.md (RU)"
-echo "в конец вашего ~/.claude/CLAUDE.md — это правила, по которым агент ведёт HANDOFF."
+echo "Done. One manual step left: paste docs/rules-section.md (EN) or docs/rules-section.ru.md (RU)"
+echo "at the end of your ~/.claude/CLAUDE.md — these are the rules the agent keeps the HANDOFF by."

@@ -4,6 +4,13 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.7.1 — 2026-08-12
+
+English follow-up (discretionary findings of the v1.7.0 independent QA):
+
+- `install.sh`, `hooks/install.sh` and `hooks/doctor.sh` speak English — messages and comments; logic unchanged (sandbox install re-verified: clean run, doctor green).
+- `docs/rules-section.md` gains a note that older doc versions showed the HANDOFF section names in English translation while the shipped behavior always used the Russian template literals.
+
 ## v1.7.0 — 2026-08-12
 
 Skills rewritten in English, startup-cost diet for the rules, plus an `effort` status-bar widget:
