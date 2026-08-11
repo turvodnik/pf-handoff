@@ -1,6 +1,6 @@
 ---
 name: pf-handoff
-description: Checkpoint or close a session — reconcile what is proven, rewrite the live HANDOFF state file (§13), statuses and journal. NOT for handing work to another agent or worktree (that is orca-cli/orchestration). Use when the context window is running out, «сохрани состояние сессии», «сделай чекпоинт», «/pf-handoff», перед /compact или /clear, save session state.
+description: Чекпоинт или закрытие сессии — зафиксировать состояние, ничего не потеряв. Checkpoint or close a session — reconcile what is proven, rewrite the live HANDOFF state file (§13), statuses and journal. NOT for handing work to another agent or worktree (that is orca-cli/orchestration). Use when the context window is running out, «сохрани состояние сессии», «сделай чекпоинт», «/pf-handoff», перед /compact или /clear, save session state.
 ---
 
 # pf-handoff — capture the state, losing nothing

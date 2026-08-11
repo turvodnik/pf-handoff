@@ -1,6 +1,6 @@
 ---
 name: pf-resume
-description: Picking up work from the live HANDOFF file (§13) — continue in a new chat or after /clear as if it were the same chat. Use when «/pf-resume», «продолжи с прошлой сессии», «подхвати работу», «восстанови состояние», resume previous session state.
+description: Подхватить работу прошлой сессии — продолжить как в том же чате. Picking up work from the live HANDOFF file (§13) — continue in a new chat or after /clear as if it were the same chat. Use when «/pf-resume», «продолжи с прошлой сессии», «подхвати работу», «восстанови состояние», resume previous session state.
 ---
 
 # pf-resume — continue as if the chat never ended

@@ -109,7 +109,7 @@ print("\x1f".join(row))' 2>/dev/null)
   window_raw="${window_raw%%.*}"; [ -z "$window_raw" ] && window_raw="null"
   case "${tokens_raw:-0}" in ''|*[!0-9.]*) tokens_raw=0 ;; esac
 
-  # ---------- РЕНДЕР: конфигурируемый, стиль ccstatusline (референс Vladimir);
+  # ---------- РЕНДЕР: конфигурируемый, стиль ccstatusline;
   # сам ccstatusline не ставим — §12 supply-chain, у нас ноль зависимостей.
   # Конфиг (опционален): ~/.config/pf-handoff/statusline.json — раскладка строк,
   # бар, разделитель, цвета. Нет файла или он кривой — дефолты (вид без конфига
