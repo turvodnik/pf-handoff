@@ -77,7 +77,10 @@ finish() {
   if [ "$FAIL" -eq 0 ]; then echo "RESULT: GREEN"; return 0; else echo "RESULT: RED"; return 1; fi
 }
 
-mktempdir() { local d; d=$(mktemp -d -t thr-parity); CLEANUP_DIRS+=("$d"); printf '%s' "$d"; }
+# Portable form: GNU mktemp (Linux, incl. ubuntu-latest) rejects a bare
+# `-t <prefix>` ("too few X's in template"); BSD mktemp (macOS) accepts it.
+# An explicit template with X's works identically on both (verified T-016).
+mktempdir() { local d; d=$(mktemp -d "${TMPDIR:-/tmp}/thr-parity.XXXXXXXX"); CLEANUP_DIRS+=("$d"); printf '%s' "$d"; }
 
 echo "threshold-parity.sh — context-hooks regression suite"
 echo "statusline: $STATUSLINE"

@@ -50,7 +50,17 @@ cleanup() {
   for d in "${CLEANUP_DIRS[@]+"${CLEANUP_DIRS[@]}"}"; do [ -n "$d" ] && [ -d "$d" ] && rm -rf "$d"; done
 }
 trap cleanup EXIT
-mktempdir() { local d; d=$(mktemp -d -t pfho-tests); CLEANUP_DIRS+=("$d"); printf '%s' "$d"; }
+
+# Portable temp helpers: GNU mktemp (Linux, incl. ubuntu-latest — the CI
+# runner this suite ships for) rejects `-t <prefix>` unless <prefix> itself
+# contains literal X's ("too few X's in template"); BSD mktemp (macOS, this
+# suite's other target) accepts a bare prefix and appends randomness itself.
+# An explicit template with X's is accepted, identically, by both. Verified
+# on macOS and in `ubuntu:24.04` (docker) before relying on it everywhere.
+pf_mktemp_file() { mktemp "${TMPDIR:-/tmp}/$1.XXXXXXXX"; }
+pf_mktemp_dir()  { mktemp -d "${TMPDIR:-/tmp}/$1.XXXXXXXX"; }
+
+mktempdir() { local d; d=$(pf_mktemp_dir pfho-tests); CLEANUP_DIRS+=("$d"); printf '%s' "$d"; }
 
 # ===========================================================================
 # --- reusable sweeps (parameterized by root, so the negative controls below
@@ -64,7 +74,7 @@ list_sh_files() { find "$1" -name '*.sh' -not -path '*/.git/*' | sort; }
 # returns 0 if every file is syntax-clean, 1 otherwise.
 bash_n_sweep() {
   local root="$1" f bad=0 n=0 err
-  err=$(mktemp -t pfho-bashn-err)
+  err=$(pf_mktemp_file pfho-bashn-err)
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     n=$((n + 1))
@@ -193,12 +203,12 @@ group "install.sh is idempotent (double run into a sandbox settings.json)"
 sandbox="$(mktempdir)"
 settings="$sandbox/settings.json"
 printf '{"existing":{"orca/agent-hooks":"marker, must survive untouched"}}\n' > "$settings"
-run1_log="$(mktemp -t pfho-install-run1)"
+run1_log="$(pf_mktemp_file pfho-install-run1)"
 CLAUDE_SETTINGS_PATH="$settings" "$BASH_BIN" "$HOOKS_DIR/install.sh" > "$run1_log" 2>&1; run1_rc=$?
-after1="$(mktemp -t pfho-install-after1)"; cp "$settings" "$after1"
-run2_log="$(mktemp -t pfho-install-run2)"
+after1="$(pf_mktemp_file pfho-install-after1)"; cp "$settings" "$after1"
+run2_log="$(pf_mktemp_file pfho-install-run2)"
 CLAUDE_SETTINGS_PATH="$settings" "$BASH_BIN" "$HOOKS_DIR/install.sh" > "$run2_log" 2>&1; run2_rc=$?
-after2="$(mktemp -t pfho-install-after2)"; cp "$settings" "$after2"
+after2="$(pf_mktemp_file pfho-install-after2)"; cp "$settings" "$after2"
 
 if [ "$run1_rc" = 0 ] && [ "$run2_rc" = 0 ] && diff -q "$after1" "$after2" >/dev/null 2>&1; then
   pass "install.sh double run -> byte-identical settings.json (rc=$run1_rc, rc=$run2_rc)"
