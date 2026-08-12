@@ -1,5 +1,7 @@
 # pf-handoff — context budget & session continuity for Claude Code
 
+[![tests](https://github.com/turvodnik/pf-handoff/actions/workflows/tests.yml/badge.svg)](https://github.com/turvodnik/pf-handoff/actions/workflows/tests.yml)
+
 *Documentation: English (this file) · [Русская версия](README.ru.md)*
 
 A small kit — rules, two skills, and four hooks — that fixes the core pain of long agent sessions: **the context window fills up, auto-compaction fires like a lottery, and the agent forgets what it was doing**. With pf-handoff the agent sees window usage ahead of time, keeps a "state cheat-sheet" on disk, and survives history compaction or a chat switch as if nothing happened.
@@ -109,6 +111,8 @@ bash hooks/doctor.sh                 # also validates the config and says WHY it
 ## Development
 
 The development canon currently lives in the owner's private `_tools` (skill-library + context-hooks); this repository is the distribution. Before a release: `bash sync-from-tools.sh` → `git diff` → update `CHANGELOG.md` (both languages) → commit → tag `vX.Y.Z`. Versioning is semver: breaking changes (HANDOFF format, state file names, skill contracts) = major.
+
+Run the test suite locally with `bash tests/run.sh` (bash 3.2+, no dependencies beyond coreutils; ShellCheck and python3/PyYAML are used when present, skipped with a reason otherwise). The same command runs in CI on every push and pull request ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)).
 
 **pf-handoff is fully standalone** — it needs no task tracker, ticket system, or any other tooling. The rules mention a decision journal and task packets; if you don't use those, the corresponding steps simply don't apply (see the note at the top of `docs/rules-section.md`).
 
