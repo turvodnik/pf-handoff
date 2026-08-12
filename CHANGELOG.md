@@ -4,6 +4,13 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.8.2 — 2026-08-12
+
+Documentation-only patch, closing the last notes of the v1.8.1 QA:
+
+- README (both languages): the two "three conditions" phrases referred to two different triples; there are in fact four conditions, and both places now name the same four.
+- Skill step 2a no longer overstates step 6, which applies only to a session that worked outside the main branch.
+
 ## v1.8.1 — 2026-08-12
 
 Discretionary findings of the v1.8.0 independent QA, all closed:

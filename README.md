@@ -120,7 +120,7 @@ The development canon currently lives in the owner's private `_tools` (skill-lib
 
 When both are installed they integrate automatically, zero configuration: HANDOFF files reference ticket ids in `task:`, the executor checks the active HANDOFF before starting, replanning updates the "Do-not-do" list, and the retro reviews the compaction log.
 
-One integration reaches outside your machine's free tooling and is therefore opt-in twice over: with pf-workflow installed **and** the OpenAI Codex CLI present **and** the project's `.agents/codex-review.json` saying `{"enabled": true}`, closing a session that still holds uncommitted code runs a read-only Codex review of that code and puts the report path into the HANDOFF. Codex is a paid third-party CLI; miss any of those three conditions — no CLI, no consent file, no uncommitted code — and the step is skipped silently, exactly as before.
+One integration reaches outside your machine's free tooling and is therefore strictly opt-in. Four conditions must all hold: pf-workflow is installed (it ships the review script), the OpenAI Codex CLI is present, the project's `.agents/codex-review.json` says `{"enabled": true}`, and the closing session still holds uncommitted code. Then closing runs a read-only Codex review of that code and puts the report path into the HANDOFF. Codex is a paid third-party CLI; miss any of the four conditions and the step is skipped silently, exactly as before.
 
 ## Mini-glossary
 
