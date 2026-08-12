@@ -19,11 +19,6 @@
 # own test harness): no associative arrays, no ${var,,}, no mapfile.
 # Self-contained on purpose — does not source pf-do's tests/lib.sh, a
 # different skill's private test fixture.
-#
-# T-016: transplanted from _tools/context-hooks/tests/ (canon) into this
-# distribution's tests/, which sits next to hooks/ rather than inside it —
-# the only change from the canon file is the HOOKS_DIR line below. Runs
-# against THIS repo's own hooks/*.sh, never the canon.
 set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

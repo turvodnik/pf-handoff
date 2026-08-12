@@ -60,13 +60,29 @@ git push origin archive/<branch>          # if the repository has an origin
 **4. Remove the worktree** (if the branch lived in a separate working copy):
 
 ```bash
-# Orca-managed worktree — remove via Orca so its card disappears too:
-command -v orca >/dev/null && orca worktree list | grep -q "<worktree-path>" \
-  && orca worktree rm --worktree "path:<worktree-path>" \
-  || git worktree remove "<worktree-path>"
+# Three states, not two — a single `A && B || C` chain would also fall back
+# to git when Orca IS present, the worktree IS managed, but `orca rm` itself
+# fails for a real (possibly transient) reason: git would then delete the
+# worktree while its Orca card survives, pointing at nothing.
+if ! command -v orca >/dev/null 2>&1; then
+  git worktree remove "<worktree-path>"               # state 1: no Orca on this machine
+elif ! orca worktree list | grep -q "<worktree-path>"; then
+  git worktree remove "<worktree-path>"               # state 2: Orca present, this worktree is unmanaged
+else
+  # state 3: Orca manages this worktree — remove it THROUGH Orca so the card
+  # disappears too. Failure here is not a cue to fall back to git — stop.
+  orca worktree rm --worktree "path:<worktree-path>" || {
+    echo "orca worktree rm failed for an Orca-managed worktree — stop, do not fall back to git worktree remove (it would delete the worktree while the Orca card survives, pointing at nothing). Diagnose the Orca failure first (orca worktree list, Orca daemon/logs), then retry or ask the human." >&2
+    exit 1
+  }
+fi
 ```
 
-No `orca` in PATH, or the worktree is not Orca-managed — the second half handles it. Do not add `--force` (invariant 4).
+Three states, three different outcomes: no `orca` in PATH (state 1) or the
+worktree is not Orca-managed (state 2) — plain `git worktree remove` handles
+both, same as before. Orca manages the worktree but its own removal command
+fails (state 3) — stop and diagnose; do not add `--force` (invariant 4) and
+do not fall back to git, or the card orphans silently.
 
 **5. Delete the branch:**
 

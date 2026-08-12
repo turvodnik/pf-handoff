@@ -8,14 +8,18 @@
 #    context-guard.sh.
 set -u
 # Контракт «всегда exit 0»: без HOME не падаем (QA №3), числа — с точкой (не запятой).
-[ -z "${HOME:-}" ] && HOME="${TMPDIR:-/tmp}"
+# $HOME САМ не переопределяем (F-20): чужой код ниже по стеку (дочерние
+# команды, будущие правки) не должен принять временный каталог за настоящий
+# домашний. Весь внутренний state живёт под PF_EFFECTIVE_HOME — либо
+# настоящий $HOME, либо, при его отсутствии, TMPDIR/tmp.
+PF_EFFECTIVE_HOME="${HOME:-${TMPDIR:-/tmp}}"
 export LC_ALL=C
 
 # Путь переопределяем только для тестов (фикстура "орковский скрипт отсутствует"
 # без переименования реального файла Orca — чужие файлы ~/.orca/agent-hooks/*
 # не трогаем). По умолчанию — стандартный путь Orca; нет Orca — условие ниже
 # просто пропустит вызов, наша часть работает без изменений.
-ORCA_STATUSLINE="${CONTEXT_HOOKS_ORCA_STATUSLINE:-$HOME/.orca/agent-hooks/claude-statusline.sh}"
+ORCA_STATUSLINE="${CONTEXT_HOOKS_ORCA_STATUSLINE:-$PF_EFFECTIVE_HOME/.orca/agent-hooks/claude-statusline.sh}"
 
 # "4hr 56m" / "4d 12hr 6m" / "0m" из epoch-времени сброса; мусор -> "—".
 fmt_reset() {
@@ -114,7 +118,7 @@ print("\x1f".join(row))' 2>/dev/null)
   # Конфиг (опционален): ~/.config/pf-handoff/statusline.json — раскладка строк,
   # бар, разделитель, цвета. Нет файла или он кривой — дефолты (вид без конфига
   # идентичен v1.5.0). Env-переопределение пути — для тестов.
-  local cfg_file="${PF_STATUSLINE_CONFIG:-$HOME/.config/pf-handoff/statusline.json}"
+  local cfg_file="${PF_STATUSLINE_CONFIG:-$PF_EFFECTIVE_HOME/.config/pf-handoff/statusline.json}"
   local cfg_l1="model,effort,context,branch" cfg_l2="session,weekly"
   local cfg_bw=20 cfg_bf="█" cfg_be="░" cfg_sep=" | " cfg_colors=1
   if [ -f "$cfg_file" ] && [ -r "$cfg_file" ]; then
@@ -299,7 +303,7 @@ except Exception:
   [ "${#session_id}" -gt 200 ] && return 0
 
   local state_dir tmp now
-  state_dir="$HOME/.claude/context-state"
+  state_dir="$PF_EFFECTIVE_HOME/.claude/context-state"
   mkdir -p "$state_dir" 2>/dev/null
   now=$(date +%s)
   tmp="$state_dir/.tmp.$$.$RANDOM"

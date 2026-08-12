@@ -5,7 +5,9 @@
 set -u
 # Контракт «никогда не мешать сессии»: без HOME не выключаемся молча, а
 # уходим во временный каталог (та же страховка, что в statusline.sh).
-[ -z "${HOME:-}" ] && HOME="${TMPDIR:-/tmp}"
+# $HOME САМ не переопределяем (F-20) — весь внутренний state живёт под
+# PF_EFFECTIVE_HOME (см. statusline.sh, тот же контракт).
+PF_EFFECTIVE_HOME="${HOME:-${TMPDIR:-/tmp}}"
 
 THRESH_Z1='[Контекст: занято %s%%, свободно ~%sk токенов. §13: сделай чекпоинт HANDOFF; новые крупные куски — субагентам или в новую сессию.]'
 THRESH_Z2='[Контекст: занято %s%%, свободно ~%sk токенов. §13: новых M/L-кусков не начинать; доведи текущий до проверяемой точки и обнови HANDOFF.]'
@@ -110,7 +112,7 @@ except Exception:
   fi
 
   local state_dir state_file
-  state_dir="$HOME/.claude/context-state"
+  state_dir="$PF_EFFECTIVE_HOME/.claude/context-state"
   state_file="$state_dir/$session_id.json"
 
   # Значения, которые в итоге пойдут в формулу/сообщение.
@@ -177,7 +179,7 @@ print("\t".join([str(g(d.get("pct"))), str(g(d.get("window"))), str(g(d.get("inp
     else
       window=200000
       local settings_path model_name lc_model
-      settings_path="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
+      settings_path="${CLAUDE_SETTINGS_PATH:-$PF_EFFECTIVE_HOME/.claude/settings.json}"
       model_name=""
       if [ -r "$settings_path" ]; then
         if [ "$has_jq" = 1 ]; then

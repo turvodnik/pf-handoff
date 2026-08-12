@@ -3,11 +3,13 @@
 # exit 1 on any FAIL. Operator tool (not a hook) — like install.sh,
 # errors are exit 1, not a silent exit 0.
 set -u
-[ -z "${HOME:-}" ] && HOME="${TMPDIR:-/tmp}"
+# $HOME САМ не переопределяем (F-20) — весь внутренний state живёт под
+# PF_EFFECTIVE_HOME (тот же контракт, что в statusline.sh/context-guard.sh).
+PF_EFFECTIVE_HOME="${HOME:-${TMPDIR:-/tmp}}"
 
-SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
+SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$PF_EFFECTIVE_HOME/.claude/settings.json}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-STATE_DIR="$HOME/.claude/context-state"
+STATE_DIR="$PF_EFFECTIVE_HOME/.claude/context-state"
 
 FAIL=0
 
@@ -70,7 +72,7 @@ fi
 # 4) Orca compatibility — checked ONLY if Orca is installed on this machine
 # (~/.orca/agent-hooks exists). No Orca is not an error: the statusline
 # wrapper simply skips the missing script.
-if [ -d "$HOME/.orca/agent-hooks" ]; then
+if [ -d "$PF_EFFECTIVE_HOME/.orca/agent-hooks" ]; then
   # -o | wc -l, не grep -c: в однострочном settings.json все записи лежат в
   # одной строке, и счётчик строк занижал бы их до 1.
   orca_hook_count=$(grep -o 'claude-hook.sh' "$SETTINGS_PATH" 2>/dev/null | wc -l | tr -d ' ')
@@ -104,7 +106,7 @@ fi
 
 # 6) status-bar config (optional): present but broken is the one case where
 # the user silently gets the defaults and cannot tell why.
-SL_CFG="${PF_STATUSLINE_CONFIG:-$HOME/.config/pf-handoff/statusline.json}"
+SL_CFG="${PF_STATUSLINE_CONFIG:-$PF_EFFECTIVE_HOME/.config/pf-handoff/statusline.json}"
 if [ -e "$SL_CFG" ]; then
   if [ "$JSON_READER" = "none" ]; then
     fail "status-bar config exists but cannot be checked — neither python3 nor jq is available ($SL_CFG)"

@@ -4,6 +4,17 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.9.0 — 2026-08-13
+
+The `PF_EFFECTIVE_HOME` contract, three-state branch closing, plus a test suite that watches its own back. Minor, not patch: the new `bash tests/run.sh` + CI is a genuine new capability, not a fix, and nothing here renames a state file, changes the HANDOFF format or the install scheme (this project's own bar for major).
+
+- **`$HOME` itself is never reassigned again (F-20).** `statusline.sh`, `context-guard.sh` and `doctor.sh` used to patch the real `$HOME` in place when it was unset (falling back to `$TMPDIR`); each now computes a separate `PF_EFFECTIVE_HOME` and reads/writes state through that instead. Every effective path stays the same — nothing a caller observes changes — but downstream code (a child command, a future edit to these scripts) can no longer mistake the fallback directory for a real home by reading `$HOME` directly.
+- **Branch-closing worktree removal is three states, not two.** The old `A && B || C` one-liner silently fell back to `git worktree remove` whenever `orca worktree rm` itself failed for an Orca-managed worktree — deleting the worktree while its Orca card survived, pointing at nothing. The reference now spells out three states: no Orca on the machine, or an unmanaged worktree (both: plain `git worktree remove`, same as before), and an Orca-managed worktree where Orca's own removal command fails (stop and diagnose — never fall back to git).
+- **New: `bash tests/run.sh` + GitHub Actions CI.** One command runs `bash -n` and ShellCheck on every hook, validates the workflow YAML, re-runs `threshold-parity.sh` (statusline/guard zone parity, T-014/F-20), a 24-case hooks-never-crash matrix, `install.sh` idempotency and `doctor.sh` against a minified `settings.json`, plus two negative controls (a mutated hook or a mutated threshold must turn its own check red). Portable `mktemp` in the harness itself — a BSD-only `-t <prefix>` form silently no-ops the negative controls on `ubuntu-latest`'s GNU coreutils, found and fixed before this shipped.
+- `sync-from-tools.sh` now carries `tests/threshold-parity.sh` across on every sync, adapting its one `HOOKS_DIR` line automatically — it used to be a manual, easy-to-forget transplant (the same rsync filter that deliberately keeps `context-hooks/tests/` out of `hooks/` also meant the file never reached `tests/` either, until now).
+
+Verified: `bash tests/run.sh` — 34/34 GREEN.
+
 ## v1.8.2 — 2026-08-12
 
 Documentation-only patch, closing the last notes of the v1.8.1 QA:
