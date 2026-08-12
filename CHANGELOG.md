@@ -14,6 +14,9 @@ Threshold parsing fixed, plus an optional Codex pass on closing:
 
 Verified: the live `statusline.sh --preview` against the guard's reference parsing on 9 cases (fractional, ordering, range boundaries, numeric strings, null) — the bar now changes colour exactly where the guard accepts the thresholds; previously 5 of the 9 diverged. The first two of these defects were found by a Codex review, and two more by a Codex review of the fix for the first.
 
+Independent QA before release found one more divergence, now fixed: the guard accepted string thresholds carrying a space or a sign (`[" 50", "+50", ...]`) that the status line rejects — `test -ge` tolerates them, and the digits-only filter existed on one side only. Two more alignments came with it: the project directory is now resolved by the same formula in both hooks (`workspace.current_dir`, then `cwd`; the guard used to read only `cwd`, so the two could read different config files), and a config with a UTF-8 BOM no longer breaks the no-`jq` branch. Verified on 13 threshold cases against the live status line.
+
+
 ## v1.7.1 — 2026-08-12
 
 English follow-up (discretionary findings of the v1.7.0 independent QA):

@@ -189,7 +189,7 @@ print("\x1f".join(re.sub(r"[\x00-\x1f\x7f]", " ", x) for x in row))' "$cfg_file"
         zrow=$(python3 -c '
 import json, sys
 try:
-    tt = json.load(open(sys.argv[1])).get("thresholds")
+    tt = json.load(open(sys.argv[1], encoding="utf-8-sig")).get("thresholds")
     assert isinstance(tt, list) and len(tt) == 3
     print("\t".join(str(x) for x in tt))
 except Exception:

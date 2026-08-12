@@ -18,10 +18,13 @@ run() {
 
   local row session_id event transcript_path agent_id cwd_in
   if [ "$has_jq" = 1 ]; then
+    # Каталог проекта — по той же формуле, что в statusline.sh (сперва
+    # workspace.current_dir, потом cwd): иначе два хука читали бы
+    # .agents/context-budget.json из разных каталогов.
     # Разделитель U+001F (unit separator), НЕ таб: таб для bash-read — «IFS-пробел»,
     # последовательные табы схлопываются, и пустые поля (например, отсутствующий
     # agent_id) сдвигали бы соседние значения на их место.
-    row=$(printf '%s' "$input" | jq -r '[(.session_id // ""), (.hook_event_name // ""), (.transcript_path // ""), (.agent_id // ""), (.cwd // "")] | join("\u001f")' 2>/dev/null)
+    row=$(printf '%s' "$input" | jq -r '[(.session_id // ""), (.hook_event_name // ""), (.transcript_path // ""), (.agent_id // ""), (if (.workspace|type) == "object" then (.workspace.current_dir // .cwd // "") else (.cwd // "") end)] | join("\u001f")' 2>/dev/null)
   else
     row=$(printf '%s' "$input" | python3 -c '
 import json, sys
@@ -29,7 +32,9 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
-print("\x1f".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") or ""), str(d.get("transcript_path") or ""), str(d.get("agent_id") or ""), str(d.get("cwd") or "")]))
+ws = d.get("workspace")
+cwd = (ws.get("current_dir") if isinstance(ws, dict) else None) or d.get("cwd") or ""
+print("\x1f".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") or ""), str(d.get("transcript_path") or ""), str(d.get("agent_id") or ""), str(cwd)]))
 ' 2>/dev/null)
   fi
   IFS=$'\x1f' read -r session_id event transcript_path agent_id cwd_in <<< "$row"
@@ -74,7 +79,7 @@ print("\x1f".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") 
       trow=$(python3 -c '
 import json, sys
 try:
-    d = json.load(open(sys.argv[1]))
+    d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
     t = d.get("thresholds")
     assert isinstance(t, list) and len(t) == 3
     # str(x), НЕ str(int(x)): целочисленность проверяет bash ниже — так ветка
@@ -87,9 +92,16 @@ except Exception:
     if [ -n "$trow" ]; then
       local c1 c2 c3
       IFS=$'\t' read -r c1 c2 c3 <<< "$trow"
-      if [ "$c1" -ge 1 ] 2>/dev/null && [ "$c1" -lt "$c2" ] 2>/dev/null && [ "$c2" -lt "$c3" ] 2>/dev/null && [ "$c3" -le 99 ] 2>/dev/null; then
-        t1="$c1"; t2="$c2"; t3="$c3"
-      fi
+      # Сначала «только цифры», как в statusline.sh: `test -ge` терпит пробелы и
+      # знак (" 50", "+50"), поэтому без этого фильтра guard принимал конфиги,
+      # которые статус-строка отвергает, и зоны бара расходились с директивами.
+      case "$c1$c2$c3" in
+        *[!0-9]*|'') : ;;
+        *)
+          if [ "$c1" -ge 1 ] 2>/dev/null && [ "$c1" -lt "$c2" ] 2>/dev/null && [ "$c2" -lt "$c3" ] 2>/dev/null && [ "$c3" -le 99 ] 2>/dev/null; then
+            t1="$c1"; t2="$c2"; t3="$c3"
+          fi ;;
+      esac
     fi
   fi
 
@@ -108,7 +120,7 @@ except Exception:
       row=$(python3 -c '
 import json, sys
 try:
-    d = json.load(open(sys.argv[1]))
+    d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
 except Exception:
     d = {}
 def g(v):
@@ -170,7 +182,7 @@ print("\t".join([str(g(d.get("pct"))), str(g(d.get("window"))), str(g(d.get("inp
           model_name=$(python3 -c '
 import json, sys
 try:
-    d = json.load(open(sys.argv[1]))
+    d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
 except Exception:
     d = {}
 print(d.get("model") or "")
