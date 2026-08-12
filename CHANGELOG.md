@@ -4,6 +4,16 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.8.1 — 2026-08-12
+
+Discretionary findings of the v1.8.0 independent QA, all closed:
+
+- `context-guard.sh` used to switch itself off silently when `HOME` was unset, while `statusline.sh` has had the fallback since v1.5.0 — the only input on which the two hooks disagreed. Both now fall back to `TMPDIR`.
+- The no-`jq` branch printed its directive with `\uXXXX` escapes: valid JSON, but the text is meant to be read by a human and an agent.
+- `doctor.sh` judged `settings.json` only through `python3` and reported "invalid or missing" on a machine that has `jq` — contradicting the README, which promises either one is enough. It also counted matching *lines* rather than occurrences, so a single-line `settings.json` produced a false "not registered".
+- Step 2a no longer contradicts step 6: it is named as the exception path (the normal place for a review is before the commit, pf-do step 5a), and the exit code 1 of the companion script is spelled out as "not reviewed", never "clean".
+- README (both languages) now states that with pf-workflow, the Codex CLI and project consent all present, closing a session may call a paid third-party CLI — and that missing any of the three means the step is skipped silently.
+
 ## v1.8.0 — 2026-08-12
 
 Threshold parsing fixed, plus an optional Codex pass on closing:

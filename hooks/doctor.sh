@@ -23,8 +23,17 @@ for name in statusline.sh context-guard.sh sessionstart.sh precompact.sh install
 done
 
 # 2) settings.json is valid
-if python3 -m json.tool "$SETTINGS_PATH" > /dev/null 2>&1; then
+if command -v python3 >/dev/null 2>&1; then
+  json_valid() { python3 -m json.tool "$1" > /dev/null 2>&1; }
+elif command -v jq >/dev/null 2>&1; then
+  json_valid() { jq -e . "$1" > /dev/null 2>&1; }
+else
+  json_valid() { return 2; }   # neither reader: cannot judge, say so below
+fi
+if json_valid "$SETTINGS_PATH"; then
   ok "settings.json is valid ($SETTINGS_PATH)"
+elif [ "$?" = 2 ]; then
+  fail "cannot check settings.json — neither python3 nor jq is available"
 else
   fail "settings.json is invalid or missing ($SETTINGS_PATH)"
 fi
@@ -38,7 +47,7 @@ else
   fail "statusLine missing / not pointing at our statusline.sh"
 fi
 
-if [ "$(grep -c "/context-guard.sh" "$SETTINGS_PATH" 2>/dev/null || echo 0)" -ge 2 ] 2>/dev/null; then
+if [ "$(grep -o "/context-guard.sh" "$SETTINGS_PATH" 2>/dev/null | wc -l | tr -d ' ')" -ge 2 ] 2>/dev/null; then
   ok "context-guard.sh registered in UserPromptSubmit and PostToolUse"
 else
   fail "context-guard.sh not registered (2 occurrences needed: UserPromptSubmit + PostToolUse)"
@@ -60,7 +69,10 @@ fi
 # (~/.orca/agent-hooks exists). No Orca is not an error: the statusline
 # wrapper simply skips the missing script.
 if [ -d "$HOME/.orca/agent-hooks" ]; then
-  orca_hook_count=$(grep -c 'claude-hook.sh' "$SETTINGS_PATH" 2>/dev/null || echo 0)
+  # -o | wc -l, не grep -c: в однострочном settings.json все записи лежат в
+  # одной строке, и счётчик строк занижал бы их до 1.
+  orca_hook_count=$(grep -o 'claude-hook.sh' "$SETTINGS_PATH" 2>/dev/null | wc -l | tr -d ' ')
+  [ -z "$orca_hook_count" ] && orca_hook_count=0
   if [ "$orca_hook_count" -ge 1 ] 2>/dev/null; then
     ok "Orca hooks are in place (claude-hook.sh occurs $orca_hook_count times)"
   else

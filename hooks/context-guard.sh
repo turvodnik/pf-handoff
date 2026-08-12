@@ -3,6 +3,9 @@
 # PostToolUse (какое именно сработало, берём из .hook_event_name входа).
 # Контракт: НИКОГДА не падать и не блокировать сессию (see statusline.sh header).
 set -u
+# Контракт «никогда не мешать сессии»: без HOME не выключаемся молча, а
+# уходим во временный каталог (та же страховка, что в statusline.sh).
+[ -z "${HOME:-}" ] && HOME="${TMPDIR:-/tmp}"
 
 THRESH_Z1='[Контекст: занято %s%%, свободно ~%sk токенов. §13: сделай чекпоинт HANDOFF; новые крупные куски — субагентам или в новую сессию.]'
 THRESH_Z2='[Контекст: занято %s%%, свободно ~%sk токенов. §13: новых M/L-кусков не начинать; доведи текущий до проверяемой точки и обнови HANDOFF.]'
@@ -68,7 +71,8 @@ print("\x1f".join([str(d.get("session_id") or ""), str(d.get("hook_event_name") 
 
   # Пороги зон: по умолчанию 60/80/90, проект может переопределить файлом
   # <cwd>/.agents/context-budget.json вида {"thresholds": [50, 70, 85]}
-  # (ровно три целых 1–99 по возрастанию; иначе — молча дефолт).
+  # (ровно три целых 1–99 по возрастанию; число или строка из одних цифр —
+  # обе стороны трактуют одинаково; иначе — молча дефолт).
   local t1=60 t2=80 t3=90
   local cfg="$cwd_in/.agents/context-budget.json"
   if [ -n "$cwd_in" ] && [ -f "$cfg" ] && [ -r "$cfg" ]; then
@@ -237,7 +241,7 @@ emit_json() {
   else
     EAC_EVENT="$event" EAC_MSG="$msg" python3 -c '
 import json, os
-print(json.dumps({"hookSpecificOutput": {"hookEventName": os.environ["EAC_EVENT"], "additionalContext": os.environ["EAC_MSG"]}}))
+print(json.dumps({"hookSpecificOutput": {"hookEventName": os.environ["EAC_EVENT"], "additionalContext": os.environ["EAC_MSG"]}}, ensure_ascii=False))
 '
   fi
 }
