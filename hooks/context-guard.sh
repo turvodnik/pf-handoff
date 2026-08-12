@@ -24,7 +24,7 @@ run() {
     # Разделитель U+001F (unit separator), НЕ таб: таб для bash-read — «IFS-пробел»,
     # последовательные табы схлопываются, и пустые поля (например, отсутствующий
     # agent_id) сдвигали бы соседние значения на их место.
-    row=$(printf '%s' "$input" | jq -r '[(.session_id // ""), (.hook_event_name // ""), (.transcript_path // ""), (.agent_id // ""), (if (.workspace|type) == "object" then (.workspace.current_dir // .cwd // "") else (.cwd // "") end)] | join("\u001f")' 2>/dev/null)
+    row=$(printf '%s' "$input" | jq -r '[(.session_id // ""), (.hook_event_name // ""), (.transcript_path // ""), (.agent_id // ""), (if (.workspace|type) == "object" and ((.workspace.current_dir // "") != "") then .workspace.current_dir else (.cwd // "") end)] | join("\u001f")' 2>/dev/null)
   else
     row=$(printf '%s' "$input" | python3 -c '
 import json, sys

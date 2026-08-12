@@ -64,7 +64,7 @@ run() {
         (if (.rate_limits|type) == "object" and (.rate_limits.five_hour|type) == "object" then (.rate_limits.five_hour.resets_at // "null") else "null" end),
         (if (.rate_limits|type) == "object" and (.rate_limits.seven_day|type) == "object" then (.rate_limits.seven_day.used_percentage // "null") else "null" end),
         (if (.rate_limits|type) == "object" and (.rate_limits.seven_day|type) == "object" then (.rate_limits.seven_day.resets_at // "null") else "null" end),
-        (if (.workspace|type) == "object" then (.workspace.current_dir // .cwd // "") else (.cwd // "") end)
+        (if (.workspace|type) == "object" and ((.workspace.current_dir // "") != "") then .workspace.current_dir else (.cwd // "") end)
       ] | map(tostring) | map(gsub("[\u0000-\u001F\u007F]"; " ")) | join("\u001f")
     ' 2>/dev/null)
   else
