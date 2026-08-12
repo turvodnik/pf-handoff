@@ -4,6 +4,16 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## v1.8.0 — 2026-08-12
+
+Threshold parsing fixed, plus an optional Codex pass on closing:
+
+- **Fix: the status bar and the guard now share one threshold contract.** With a fractional `.agents/context-budget.json` (e.g. `[59.5, 79.5, 89.5]`) the status line floored the values and coloured the bar at 59/79, while `context-guard.sh` rejected the same config and kept firing at 60/80/90 — the colours did not mark where the directives actually arrive. The status line also accepted thresholds out of order or out of range (`[90, 5, 3]`, `[50, 70, 100]`), which the guard refuses. Both sides now require exactly three integers 1–99 in ascending order, silently defaulting otherwise.
+- **Fix: two divergences inside the parsing itself.** Thresholds were joined with a space and split unquoted, so a value like `"60 70"` inside the JSON became two fields and passed validation the guard rejects — the separator is a tab now. And in the no-`jq` branch the guard converted values with `int(x)`, accepting `[1.0, 80, 90]` that its own jq branch refuses; it emits `str(x)` now, with the integer check left to the shell. All four parsing branches follow the same contract.
+- **New: step 2a — an optional Codex pass over uncommitted code when closing a session.** Runs only if the pf-workflow companion ships `pf-do/scripts/codex-review.sh` and only when the tree still holds uncommitted *code*; without Codex or that script the step is skipped silently. Findings do not become work — a leaving session fixes nothing; the report path and one digest line go into «Следующий шаг» so the next session starts with the remarks in hand.
+
+Verified: the live `statusline.sh --preview` against the guard's reference parsing on 9 cases (fractional, ordering, range boundaries, numeric strings, null) — the bar now changes colour exactly where the guard accepts the thresholds; previously 5 of the 9 diverged. The first two of these defects were found by a Codex review, and two more by a Codex review of the fix for the first.
+
 ## v1.7.1 — 2026-08-12
 
 English follow-up (discretionary findings of the v1.7.0 independent QA):

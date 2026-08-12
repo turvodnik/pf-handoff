@@ -184,21 +184,34 @@ print("\x1f".join(re.sub(r"[\x00-\x1f\x7f]", " ", x) for x in row))' "$cfg_file"
     local z1=60 z2=80 zrow=""
     if [ -n "${cwd_in:-}" ] && [ -f "$cwd_in/.agents/context-budget.json" ] && [ -r "$cwd_in/.agents/context-budget.json" ]; then
       if [ "$has_jq" = 1 ]; then
-        zrow=$(jq -r 'if (.thresholds|type)=="array" and (.thresholds|length)==3 and ((.thresholds|map(type))|all(.=="number")) then "\(.thresholds[0]|floor) \(.thresholds[1]|floor)" else "" end' "$cwd_in/.agents/context-budget.json" 2>/dev/null)
+        zrow=$(jq -r 'if (.thresholds|type)=="array" and (.thresholds|length)==3 then (.thresholds|map(tostring)|join("\t")) else "" end' "$cwd_in/.agents/context-budget.json" 2>/dev/null)
       else
         zrow=$(python3 -c '
 import json, sys
 try:
     tt = json.load(open(sys.argv[1])).get("thresholds")
     assert isinstance(tt, list) and len(tt) == 3
-    print(int(float(tt[0])), int(float(tt[1])))
+    print("\t".join(str(x) for x in tt))
 except Exception:
     print("")' "$cwd_in/.agents/context-budget.json" 2>/dev/null)
       fi
+      # Валидация ровно та же, что в context-guard.sh (три целых 1–99 по
+      # возрастанию; дробные и любой мусор — молча дефолт). Иначе бар красился
+      # бы по одним границам, а guard слал директивы по другим. Разделитель —
+      # табуляция, а не пробел: значение вида "60 70" внутри JSON иначе
+      # распалось бы на два поля и проехало валидацию.
       if [ -n "$zrow" ]; then
-        set -- $zrow
-        case "${1:-}" in *[!0-9]*|'') : ;; *) z1="$1" ;; esac
-        case "${2:-}" in *[!0-9]*|'') : ;; *) z2="$2" ;; esac
+        local c1 c2 c3
+        IFS=$'\t' read -r c1 c2 c3 <<< "$zrow"
+        case "$c1$c2$c3" in
+          *[!0-9]*|'') : ;;
+          *)
+            if [ "$c1" -ge 1 ] 2>/dev/null && [ "$c1" -lt "$c2" ] 2>/dev/null \
+               && [ "$c2" -lt "$c3" ] 2>/dev/null && [ "$c3" -le 99 ] 2>/dev/null; then
+              z1="$c1"; z2="$c2"
+            fi
+            ;;
+        esac
       fi
     fi
     filled=$(( pct_int * cfg_bw / 100 )); [ "$filled" -gt "$cfg_bw" ] && filled="$cfg_bw"; [ "$filled" -lt 0 ] && filled=0

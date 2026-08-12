@@ -77,7 +77,9 @@ try:
     d = json.load(open(sys.argv[1]))
     t = d.get("thresholds")
     assert isinstance(t, list) and len(t) == 3
-    print("\t".join(str(int(x)) for x in t))
+    # str(x), НЕ str(int(x)): целочисленность проверяет bash ниже — так ветка
+    # без jq отвергает дробные ровно как ветка с jq (и как statusline.sh).
+    print("\t".join(str(x) for x in t))
 except Exception:
     print("")
 ' "$cfg" 2>/dev/null)
