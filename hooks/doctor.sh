@@ -3,6 +3,7 @@
 # exit 1 on any FAIL. Operator tool (not a hook) — like install.sh,
 # errors are exit 1, not a silent exit 0.
 set -u
+[ -z "${HOME:-}" ] && HOME="${TMPDIR:-/tmp}"
 
 SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -23,17 +24,18 @@ for name in statusline.sh context-guard.sh sessionstart.sh precompact.sh install
 done
 
 # 2) settings.json is valid
+JSON_READER="none"
 if command -v python3 >/dev/null 2>&1; then
-  json_valid() { python3 -m json.tool "$1" > /dev/null 2>&1; }
+  JSON_READER="python3"; json_valid() { python3 -m json.tool "$1" > /dev/null 2>&1; }
 elif command -v jq >/dev/null 2>&1; then
-  json_valid() { jq -e . "$1" > /dev/null 2>&1; }
+  JSON_READER="jq"; json_valid() { jq -e . "$1" > /dev/null 2>&1; }
 else
-  json_valid() { return 2; }   # neither reader: cannot judge, say so below
+  json_valid() { return 1; }
 fi
-if json_valid "$SETTINGS_PATH"; then
-  ok "settings.json is valid ($SETTINGS_PATH)"
-elif [ "$?" = 2 ]; then
+if [ "$JSON_READER" = "none" ]; then
   fail "cannot check settings.json — neither python3 nor jq is available"
+elif json_valid "$SETTINGS_PATH"; then
+  ok "settings.json is valid ($SETTINGS_PATH)"
 else
   fail "settings.json is invalid or missing ($SETTINGS_PATH)"
 fi
@@ -104,10 +106,12 @@ fi
 # the user silently gets the defaults and cannot tell why.
 SL_CFG="${PF_STATUSLINE_CONFIG:-$HOME/.config/pf-handoff/statusline.json}"
 if [ -e "$SL_CFG" ]; then
-  if [ -f "$SL_CFG" ] && python3 -m json.tool "$SL_CFG" > /dev/null 2>&1; then
+  if [ "$JSON_READER" = "none" ]; then
+    fail "status-bar config exists but cannot be checked — neither python3 nor jq is available ($SL_CFG)"
+  elif [ -f "$SL_CFG" ] && json_valid "$SL_CFG"; then
     ok "status-bar config is valid ($SL_CFG)"
   else
-    fail "status-bar config exists but does not parse as JSON — statusline silently falls back to defaults; check the syntax: python3 -m json.tool '$SL_CFG'"
+    fail "status-bar config exists but does not parse as JSON — statusline silently falls back to defaults; check the syntax with python3 -m json.tool or jq: '$SL_CFG'"
   fi
 else
   ok "status-bar config absent — default look (that is normal)"
