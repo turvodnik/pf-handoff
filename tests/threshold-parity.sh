@@ -168,6 +168,19 @@ run_case "non-ascending"                     '{"thresholds":[30,25,20]}'      gr
 run_case "wrong length (2, not 3)"           '{"thresholds":[20,25]}'         green
 
 # ===========================================================================
+group "Parity at pct=41: UTF-8 BOM in the config file (I-011, encoding robustness)"
+# ===========================================================================
+# A BOM (byte-order mark, EF BB BF) ahead of the JSON is common when a config
+# is saved by a Windows editor. Both sides read it through the same shape of
+# code (jq, which strips a BOM natively; or python3's `encoding="utf-8-sig"`,
+# which strips it explicitly) — this case is a regression guard on that
+# parity, not a claim that BOM is special-cased anywhere. Valid boundary
+# config, so this belongs with the "1 default + 3 valid" group above in
+# spirit; kept separate because it is testing encoding, not threshold values.
+run_case "UTF-8 BOM ahead of valid config, 41 is yellow [40,60,80]" \
+  $'\xEF\xBB\xBF{"thresholds":[40,60,80]}' yellow
+
+# ===========================================================================
 group "F-20: env -u HOME — both hooks stay rc=0 and chain through the TMPDIR fallback"
 # ===========================================================================
 # TMPDIR is pinned to a sandbox so the fallback path is both deterministic
