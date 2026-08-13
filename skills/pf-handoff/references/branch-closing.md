@@ -66,8 +66,15 @@ git push origin archive/<branch>          # if the repository has an origin
 # worktree while its Orca card survives, pointing at nothing.
 if ! command -v orca >/dev/null 2>&1; then
   git worktree remove "<worktree-path>"               # state 1: no Orca on this machine
-elif ! orca worktree list | grep -q "<worktree-path>"; then
-  git worktree remove "<worktree-path>"               # state 2: Orca present, this worktree is unmanaged
+elif ! ORCA_LIST=$(orca worktree list 2>/dev/null); then
+  # state 2a: Orca is here but the lookup itself failed — ownership unknown.
+  # Never guess: a failed `list` used to read as "unmanaged" (the pipeline
+  # returned grep's status, not Orca's) and git would delete a managed
+  # worktree behind Orca's back.
+  echo "orca worktree list failed — cannot tell whether this worktree is Orca-managed. Stop: diagnose Orca (daemon/logs), then retry or ask the human." >&2
+  exit 1
+elif ! printf '%s\n' "$ORCA_LIST" | grep -qF "<worktree-path>"; then
+  git worktree remove "<worktree-path>"               # state 2b: Orca present, this worktree is unmanaged
 else
   # state 3: Orca manages this worktree — remove it THROUGH Orca so the card
   # disappears too. Failure here is not a cue to fall back to git — stop.
