@@ -119,13 +119,24 @@ group "GitHub Actions workflow YAML is valid"
 WF="$ROOT/.github/workflows/tests.yml"
 if [ ! -f "$WF" ]; then
   fail "tests.yml not found at $WF"
-elif ! command -v python3 >/dev/null 2>&1; then
-  echo "SKIP  python3 not available — cannot strict-parse the workflow YAML"
 else
-  if err=$(python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1], encoding='utf-8'))" "$WF" 2>&1); then
-    pass "tests.yml parses as valid YAML"
+  # Two independent sub-checks (strict-parse, actionlint) with separate
+  # tools: neither's absence may swallow the other (T-017 fix round, 🔴 B).
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "SKIP  python3 not available — cannot strict-parse the workflow YAML"
+  elif ! python3 -c "import yaml" >/dev/null 2>&1; then
+    # python3 present, PyYAML missing: the stock python3 on ubuntu-24.04 and
+    # on macOS's Command Line Tools both lack it. Previously this fell
+    # through to the strict-parse below, which raised ModuleNotFoundError
+    # and reported "tests.yml is not valid YAML" — blaming a valid file for
+    # a missing third-party module, contradicting this exact SKIP contract.
+    echo "SKIP  PyYAML not installed (python3 -c 'import yaml' failed) — cannot strict-parse the workflow YAML"
   else
-    fail "tests.yml is not valid YAML" "$err"
+    if err=$(python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1], encoding='utf-8'))" "$WF" 2>&1); then
+      pass "tests.yml parses as valid YAML"
+    else
+      fail "tests.yml is not valid YAML" "$err"
+    fi
   fi
   if command -v actionlint >/dev/null 2>&1; then
     if out=$(actionlint "$WF" 2>&1); then pass "actionlint clean"; else fail "actionlint finding(s)" "$out"; fi
