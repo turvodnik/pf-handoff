@@ -157,6 +157,28 @@ else
 fi
 
 # ===========================================================================
+group "drift-check.sh level 1 (T-022, I-024): this repo vs a fresh sync-from-tools.sh"
+# ===========================================================================
+# Only meaningful in a dev clone under _tools/repos/pf-handoff, where the
+# canon (skill-library/, context-hooks/) sits two levels up — never true for
+# an end-user clone of this public repo, which has no _tools at all. Absent
+# canon is a SKIP, not a FAIL: this repo's own suite must stay green for
+# people who never heard of _tools (same contract as the other SKIP
+# branches above).
+DC_CANON="$ROOT/../../skill-library/tests/drift-check.sh"
+if [ -f "$DC_CANON" ]; then
+  dc_out=$("$BASH_BIN" "$DC_CANON" --level 1 --repo pf-handoff 2>&1); dc_rc=$?
+  echo "$dc_out"
+  if [ "$dc_rc" = 0 ]; then
+    pass "drift-check level 1: repo matches a fresh sync-from-tools.sh from canon"
+  else
+    fail "drift-check level 1 found drift between canon and this repo" "$dc_out"
+  fi
+else
+  echo "SKIP  no _tools canon found at $DC_CANON — expected outside a _tools/repos dev clone"
+fi
+
+# ===========================================================================
 group "hooks never crash: garbage stdin x {jq-only, python3-only, neither} x env -u HOME"
 # ===========================================================================
 # Three curated PATH variants isolate which JSON reader branch actually ran
