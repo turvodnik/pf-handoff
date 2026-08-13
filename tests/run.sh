@@ -167,7 +167,11 @@ group "drift-check.sh level 1 (T-022, I-024): this repo vs a fresh sync-from-too
 # branches above).
 DC_CANON="$ROOT/../../skill-library/tests/drift-check.sh"
 if [ -f "$DC_CANON" ]; then
-  dc_out=$("$BASH_BIN" "$DC_CANON" --level 1 --repo pf-handoff 2>&1); dc_rc=$?
+  # --repo-dir, not --repo: the checker must inspect THIS checkout ($ROOT),
+# not guess $TOOLS/repos/<name> — in a worktree or symlinked layout those
+# are different directories, and the suite would silently report on the
+# wrong one (and stay green forever if the directory were renamed).
+dc_out=$("$BASH_BIN" "$DC_CANON" --level 1 --repo-dir "$ROOT" 2>&1); dc_rc=$?
   echo "$dc_out"
   if [ "$dc_rc" = 0 ]; then
     pass "drift-check level 1: repo matches a fresh sync-from-tools.sh from canon"
