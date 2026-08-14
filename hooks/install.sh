@@ -49,9 +49,28 @@ fi
 
 # Guard wrapper "after the Orca pattern": exists/readable/executable — otherwise
 # silently drain stdin (same structure already used in settings.json).
+#
+# The interpreter is named EXPLICITLY (`bash`), and that is the whole point of
+# this line. Claude Code runs the command through the system shell, so a bare
+# `/bin/sh '<script>'` ignores the `#!/bin/bash` shebang: on macOS /bin/sh IS
+# bash in POSIX mode and everything works, but on Debian/Ubuntu /bin/sh is dash,
+# which does not understand the bash-isms our hooks use (`<<<`, $'\x1f') — every
+# hook died with a syntax error and rc=2, and rc=2 is not "did nothing": for
+# PreCompact it means "compaction blocked" and for UserPromptSubmit "prompt
+# blocked and erased". So on Linux the gate wedged EVERY compaction.
+#
+# Why explicit bash rather than making the hooks POSIX: the hooks are ~1500
+# lines of bash that would have to be rewritten and re-proved (arrays, local,
+# <<<, $'…'), and every future edit would have to stay POSIX with no test able
+# to notice on macOS. Naming the interpreter is one word and cannot regress.
+#
+# `bash` via PATH, not /bin/bash: on NixOS/Homebrew-only machines bash is not in
+# /bin. No bash at all -> the else branch drains stdin and exits 0 — the hook
+# self-disables instead of wedging the session (a hook that cannot run must not
+# block; blocking is only for "the snapshot was not written").
 wrap() {
   local script="$1"
-  printf "if [ -f '%s' ] && [ -r '%s' ] && [ -x '%s' ]; then /bin/sh '%s'; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi" \
+  printf "if [ -f '%s' ] && [ -r '%s' ] && [ -x '%s' ] && command -v bash >/dev/null 2>&1; then bash '%s'; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi" \
     "$script" "$script" "$script" "$script"
 }
 
@@ -72,18 +91,26 @@ command -v jq >/dev/null 2>&1 && has_jq=1
 
 TMP_OUT="$(mktemp "${SETTINGS_PATH}.XXXXXX")"
 
+# upsert, not add-if-missing: OUR entry (matched by the script file name) is
+# replaced with the current form, a foreign one is never touched. Add-only was
+# a trap — a machine that already had the old `/bin/sh` wrapper kept it forever,
+# because "an entry mentioning precompact.sh exists" looked like "installed".
+# `git pull && bash install.sh`, the documented update path, then repaired
+# nothing. Idempotency is unchanged: the replacement is byte-identical on the
+# second run.
 JQ_FILTER='
-def add_if_missing(evt; marker; entry):
+def upsert(evt; marker; entry):
   .hooks[evt] = ((.hooks[evt] // []) as $arr
-    | if ($arr | any(.hooks[]?.command? // "" | contains(marker))) then $arr
+    | if ($arr | any(.hooks[]?.command? // "" | contains(marker)))
+      then ($arr | map(if ((.hooks // []) | any(.command? // "" | contains(marker))) then entry else . end))
       else $arr + [entry]
       end);
 
 .statusLine = {"type":"command","command":$sl_cmd}
-| add_if_missing("UserPromptSubmit"; $cg_marker; {"matcher":"*","hooks":[{"type":"command","command":$cg_cmd,"timeout":10}]})
-| add_if_missing("PostToolUse"; $cg_marker; {"matcher":"*","hooks":[{"type":"command","command":$cg_cmd,"timeout":10}]})
-| add_if_missing("SessionStart"; $ss_marker; {"hooks":[{"type":"command","command":$ss_cmd,"timeout":10}]})
-| add_if_missing("PreCompact"; $pc_marker; {"hooks":[{"type":"command","command":$pc_cmd,"timeout":10}]})
+| upsert("UserPromptSubmit"; $cg_marker; {"matcher":"*","hooks":[{"type":"command","command":$cg_cmd,"timeout":10}]})
+| upsert("PostToolUse"; $cg_marker; {"matcher":"*","hooks":[{"type":"command","command":$cg_cmd,"timeout":10}]})
+| upsert("SessionStart"; $ss_marker; {"hooks":[{"type":"command","command":$ss_cmd,"timeout":10}]})
+| upsert("PreCompact"; $pc_marker; {"hooks":[{"type":"command","command":$pc_cmd,"timeout":10}]})
 '
 
 merge_ok=1
@@ -103,25 +130,35 @@ path, sl_cmd, cg_cmd, ss_cmd, pc_cmd = sys.argv[1:6]
 with open(path, encoding="utf-8") as fh:
     d = json.load(fh)
 
-def add_if_missing(d, evt, marker, entry):
+def upsert(d, evt, marker, entry):
+    """Replace OUR entry with the current form; never touch a foreign one.
+
+    Add-only left stale registrations in place forever (see the jq filter
+    above): the `/bin/sh` wrapper that wedged Linux would have survived the
+    documented `git pull && bash install.sh` update.
+    """
     arr = d.setdefault("hooks", {}).setdefault(evt, [])
-    for item in arr:
+    replaced = False
+    for i, item in enumerate(arr):
         for h in item.get("hooks", []):
             if marker in (h.get("command") or ""):
-                return
-    arr.append(entry)
+                arr[i] = entry
+                replaced = True
+                break
+    if not replaced:
+        arr.append(entry)
 
 # Markers match the file name, not the directory: the _tools canon keeps the
 # scripts in context-hooks/, the public distribution — in hooks/. A directory-
 # qualified marker broke idempotency and doctor for external users.
 d["statusLine"] = {"type": "command", "command": sl_cmd}
-add_if_missing(d, "UserPromptSubmit", "/context-guard.sh",
+upsert(d, "UserPromptSubmit", "/context-guard.sh",
     {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd, "timeout": 10}]})
-add_if_missing(d, "PostToolUse", "/context-guard.sh",
+upsert(d, "PostToolUse", "/context-guard.sh",
     {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd, "timeout": 10}]})
-add_if_missing(d, "SessionStart", "/sessionstart.sh",
+upsert(d, "SessionStart", "/sessionstart.sh",
     {"hooks": [{"type": "command", "command": ss_cmd, "timeout": 10}]})
-add_if_missing(d, "PreCompact", "/precompact.sh",
+upsert(d, "PreCompact", "/precompact.sh",
     {"hooks": [{"type": "command", "command": pc_cmd, "timeout": 10}]})
 
 print(json.dumps(d, indent=2, ensure_ascii=False))

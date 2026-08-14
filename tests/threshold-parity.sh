@@ -296,7 +296,7 @@ else
     err=$(printf '{"session_id":"t031e-%s","trigger":"auto","cwd":"%s","transcript_path":"/nonexistent.jsonl"}' "$$" "$proj" \
       | HOME="$home" "$BASH_BIN" "$PRECOMPACT" 2>&1 >/dev/null)
     rc=$?
-    if [ "$rc" -eq 2 ] && printf '%s' "$err" | grep -q 'СЖАТИЕ ОСТАНОВЛЕНО'; then
+    if [ "$rc" -eq 2 ] && printf '%s' "$err" | grep -q 'COMPACTION STOPPED'; then
       pass "negative control: unwritable project AND home -> exit 2 (blocks compaction) + loud stderr"
     else
       fail "negative control: compaction was NOT blocked" "rc=$rc stderr=$err"

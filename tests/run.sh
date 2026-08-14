@@ -276,7 +276,7 @@ group "precompact.sh gate: blocks loudly without a snapshot, stays out of the wa
 # variant below blocks even on a perfectly valid payload: jq or python3 is
 # effectively a requirement of the gate, and this test states it out loud
 # rather than leaving it to be discovered on a bare machine.
-BLOCK_MARK="СЖАТИЕ ОСТАНОВЛЕНО"
+BLOCK_MARK="COMPACTION STOPPED"
 GOOD_PAYLOAD='{"session_id":"t033-gate","trigger":"manual","cwd":"","transcript_path":""}'
 
 for variant_name in jq-only python3-only neither; do
@@ -348,6 +348,175 @@ else
   fail "negative control: read-only HOME -> rc=$rc, loud=$loud" "$out"
 fi
 
+# --- empty stdin: allowed through, but never without a trace ---------------
+# Decided in T-033's fix round: a zero-length payload is not a compaction
+# event (the harness always sends JSON; the registration wrapper drains stdin
+# without calling the hook when the script is unavailable), and blocking here
+# would recreate the very wedge the /bin/sh registration caused on Debian.
+# Silence, though, was the old bug: no snapshot AND no log line meant nobody
+# could tell afterwards that the safety net had not fired.
+home_empty="$(mktempdir)"
+out=$(printf '' | PATH="$MP_JQ" HOME="$home_empty" "$MP_JQ/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
+rc=$?
+log_line=$(grep -c 'SKIPPED-empty-stdin' "$home_empty/.claude/context-state/compacts.log" 2>/dev/null || true)
+if [ "$rc" = 0 ] && [ -z "$out" ] && [ "${log_line:-0}" -ge 1 ]; then
+  pass "precompact.sh (empty stdin) -> rc=0, silent, but SKIPPED-empty-stdin logged"
+else
+  fail "precompact.sh (empty stdin) -> rc=$rc, log lines=$log_line" "$out"
+fi
+
+# --- subagent session: no snapshot by design, and the log must say so ------
+# `OK ?` used to be logged here — indistinguishable from "snapshot written".
+home_sub="$(mktempdir)"
+out=$(printf '{"session_id":"agent-t033","trigger":"auto","cwd":"","transcript_path":""}' \
+  | PATH="$MP_JQ" HOME="$home_sub" "$MP_JQ/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
+rc=$?
+sub_line=$(grep -c 'SKIPPED-subagent' "$home_sub/.claude/context-state/compacts.log" 2>/dev/null || true)
+if [ "$rc" = 0 ] && [ "${sub_line:-0}" -ge 1 ]; then
+  pass "precompact.sh (subagent session) -> rc=0 and logged as SKIPPED-subagent, not 'OK ?'"
+else
+  fail "precompact.sh (subagent session) -> rc=$rc, SKIPPED-subagent lines=$sub_line" "$out"
+fi
+
+# ===========================================================================
+group "sessionstart.sh picks up a live HANDOFF even with no HOME in the environment (F-20)"
+# ===========================================================================
+# The garbage-stdin sweep above never reaches the $HOME lines: it exits early
+# on `case "$source"`. So an unset HOME under `set -u` killed the script right
+# where it mattered, the error was swallowed by the wrapper, and the outcome
+# looked exactly like "no live cheat-sheets" — the silent loss F-20 fixed in
+# the other three hooks and missed in this one.
+ss_proj="$(mktempdir)"
+mkdir -p "$ss_proj/.agents/runtime/handoff"
+printf -- '---\nstatus: active\ntask: T-000\n---\n\n## State\nprobe\n' \
+  > "$ss_proj/.agents/runtime/handoff/$(date +%Y-%m-%d)-probe.md"
+ss_tmp="$(mktempdir)"
+ss_payload="$(printf '{"source":"startup","cwd":"%s","session_id":"t033-ss"}' "$ss_proj")"
+out=$(printf '%s' "$ss_payload" | env -u HOME TMPDIR="$ss_tmp" "$BASH_BIN" "$HOOKS_DIR/sessionstart.sh" 2>&1)
+rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'additionalContext' && printf '%s' "$out" | grep -q 'probe.md'; then
+  pass "sessionstart.sh (env -u HOME, live HANDOFF) -> the cheat-sheet is still reported"
+else
+  fail "sessionstart.sh (env -u HOME) -> rc=$rc, no HANDOFF in output" "$out"
+fi
+out=$(printf '%s' "$ss_payload" | HOME="$ss_tmp" "$BASH_BIN" "$HOOKS_DIR/sessionstart.sh" 2>&1)
+rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'probe.md'; then
+  pass "sessionstart.sh (HOME set, live HANDOFF) -> the cheat-sheet is reported"
+else
+  fail "sessionstart.sh (HOME set) -> rc=$rc, no HANDOFF in output" "$out"
+fi
+
+# ===========================================================================
+group "hooks run the way install.sh actually registers them (POSIX /bin/sh, i.e. dash on Debian/Ubuntu)"
+# ===========================================================================
+# The blind spot this group exists to close (found by the independent QA of
+# v1.10.0): every other group here starts a hook with an explicit `bash …`,
+# but Claude Code runs the registered command through the SYSTEM SHELL. On
+# macOS /bin/sh is bash in POSIX mode, so nothing showed; on Debian/Ubuntu it
+# is dash, and a wrapper that said `/bin/sh '<hook>'` ignored the #!/bin/bash
+# shebang — every hook died on the first bash-ism with rc=2. rc=2 is not
+# "did nothing": PreCompact rc=2 blocks the compaction, UserPromptSubmit rc=2
+# erases the user's prompt. The whole Linux install was wedged while CI (on
+# ubuntu-latest!) stayed green, because CI called `bash tests/run.sh`.
+#
+# So: take the command string OUT of a settings.json that install.sh just
+# wrote (never a reconstruction — the reconstruction is what CI was testing),
+# and execute it with a real POSIX shell.
+SH_BIN=""
+for cand in /bin/dash /bin/sh; do [ -x "$cand" ] && { SH_BIN="$cand"; break; }; done
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "SKIP  python3 not available — cannot read commands back out of settings.json"
+elif [ -z "$SH_BIN" ]; then
+  echo "SKIP  no POSIX shell found at /bin/dash or /bin/sh"
+else
+  # Is this /bin/sh actually POSIX-only, or bash wearing the name? Decides
+  # whether the negative control below can prove anything at all.
+  if "$SH_BIN" -c 'cat <<< x' >/dev/null 2>&1; then posix_strict=0; else posix_strict=1; fi
+  echo "shell under test: $SH_BIN (bash-isms rejected: $posix_strict)"
+
+  sh_sandbox="$(mktempdir)"
+  sh_settings="$sh_sandbox/settings.json"
+  CLAUDE_SETTINGS_PATH="$sh_settings" "$BASH_BIN" "$HOOKS_DIR/install.sh" >/dev/null 2>&1
+
+  # <event-or-statusLine> <marker> -> the registered command string
+  reg_cmd() {
+    python3 - "$sh_settings" "$1" "$2" <<'PYEOF'
+import json, sys
+path, key, marker = sys.argv[1:4]
+d = json.load(open(path, encoding="utf-8"))
+if key == "statusLine":
+    print(d.get("statusLine", {}).get("command", ""))
+    raise SystemExit
+for item in d.get("hooks", {}).get(key, []):
+    for h in item.get("hooks", []):
+        c = h.get("command") or ""
+        if marker in c:
+            print(c)
+            raise SystemExit
+print("")
+PYEOF
+  }
+
+  # --- the one that can block: PreCompact on a healthy path ----------------
+  pc_cmd="$(reg_cmd PreCompact /precompact.sh)"
+  if [ -z "$pc_cmd" ]; then
+    fail "no PreCompact command found in the settings.json install.sh just wrote"
+  else
+    home_sh="$(mktempdir)"
+    out=$(printf '{"session_id":"t033-sh","trigger":"manual","cwd":"","transcript_path":""}' \
+      | HOME="$home_sh" "$SH_BIN" -c "$pc_cmd" 2>&1)
+    rc=$?
+    snaps=$(find "$home_sh/.claude/context-state/handoff" -name '*t033-sh*.md' 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$rc" = 0 ] && [ -z "$out" ] && [ "$snaps" = 1 ]; then
+      pass "registered PreCompact command under $SH_BIN -> rc=0, silent, snapshot written"
+    else
+      fail "registered PreCompact command under $SH_BIN -> rc=$rc, snapshots=$snaps" "$out"
+    fi
+  fi
+
+  # --- the other three: registered form must not crash them -----------------
+  sh_probe() {
+    local label="$1" key="$2" marker="$3" payload="$4"
+    local cmd home out rc
+    cmd="$(reg_cmd "$key" "$marker")"
+    if [ -z "$cmd" ]; then fail "no $key command found in settings.json ($marker)"; return; fi
+    home="$(mktempdir)"
+    out=$(printf '%s' "$payload" | HOME="$home" "$SH_BIN" -c "$cmd" 2>&1); rc=$?
+    if [ "$rc" = 0 ]; then
+      pass "registered $label command under $SH_BIN -> rc=0"
+    else
+      fail "registered $label command under $SH_BIN -> rc=$rc" "$out"
+    fi
+  }
+  sh_probe "SessionStart"      SessionStart     /sessionstart.sh  '{"source":"startup","cwd":"","session_id":"t033-sh"}'
+  sh_probe "UserPromptSubmit"  UserPromptSubmit /context-guard.sh '{"session_id":"t033-sh","cwd":"","transcript_path":""}'
+  sh_probe "statusLine"        statusLine       /statusline.sh    '{"session_id":"t033-sh","workspace":{"current_dir":""}}'
+
+  # --- negative control: the pre-fix wrapper must go red here --------------
+  # Same hook, same payload, only the wrapper reverted to the old form — the
+  # one that named no interpreter and let `/bin/sh` decide. $SH_BIN is written
+  # in literally because that IS what /bin/sh resolves to on Debian/Ubuntu;
+  # spelling `/bin/sh` here would silently re-enter bash on macOS and the
+  # control would pass for the wrong reason (it did, on the first run of this
+  # very group). If this stayed green, the passes above would be proving
+  # nothing but "our hooks exit 0 a lot".
+  if [ "$posix_strict" = 1 ]; then
+    old_cmd="if [ -f '$HOOKS_DIR/precompact.sh' ]; then $SH_BIN '$HOOKS_DIR/precompact.sh'; fi"
+    home_old="$(mktempdir)"
+    out=$(printf '{"session_id":"t033-old","trigger":"manual","cwd":"","transcript_path":""}' \
+      | HOME="$home_old" "$SH_BIN" -c "$old_cmd" 2>&1)
+    rc=$?
+    if [ "$rc" != 0 ]; then
+      pass "negative control: the old /bin/sh wrapper under $SH_BIN -> rc=$rc (this is the Linux breakage)"
+    else
+      fail "negative control: old /bin/sh wrapper survived $SH_BIN — control is not sensitive" "$out"
+    fi
+  else
+    echo "SKIP  $SH_BIN accepts bash-isms (it is bash in POSIX mode) — the old-wrapper negative control cannot prove anything here"
+  fi
+fi
+
 # ===========================================================================
 group "install.sh is idempotent (double run into a sandbox settings.json)"
 # ===========================================================================
@@ -372,6 +541,56 @@ else
   fail "install.sh dropped an unrelated pre-existing settings.json entry"
 fi
 rm -f "$run1_log" "$run2_log" "$after1" "$after2"
+
+# ===========================================================================
+group "install.sh upgrades ITS OWN stale entry (the documented update path)"
+# ===========================================================================
+# `git pull && bash install.sh` is what README tells people to do to update.
+# With add-if-missing it did nothing for someone who already had the old
+# `/bin/sh` registration — "an entry mentioning precompact.sh exists" read as
+# "installed", so the Linux breakage would have survived the fix that repairs
+# it. The entry is now replaced; a foreign (Orca) entry still must not be.
+upg_sandbox="$(mktempdir)"
+upg_settings="$upg_sandbox/settings.json"
+cat > "$upg_settings" <<'JSONEOF'
+{
+  "hooks": {
+    "PreCompact": [
+      {"hooks": [{"type": "command", "command": "if [ -f '/old/path/precompact.sh' ]; then /bin/sh '/old/path/precompact.sh'; fi", "timeout": 10}]}
+    ],
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "/bin/sh '/Users/x/.orca/agent-hooks/claude-hook.sh'", "timeout": 10}]}
+    ]
+  }
+}
+JSONEOF
+CLAUDE_SETTINGS_PATH="$upg_settings" "$BASH_BIN" "$HOOKS_DIR/install.sh" >/dev/null 2>&1; upg_rc=$?
+if command -v python3 >/dev/null 2>&1; then
+  upg_report=$(python3 - "$upg_settings" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+pc = [h.get("command", "") for it in d["hooks"]["PreCompact"] for h in it.get("hooks", [])]
+ups = [h.get("command", "") for it in d["hooks"]["UserPromptSubmit"] for h in it.get("hooks", [])]
+mine = [c for c in pc if "/precompact.sh" in c]
+print("count=%d" % len(mine))
+print("stale=%d" % len([c for c in mine if "/old/path" in c]))
+print("bash=%d" % len([c for c in mine if "; then bash '" in c]))
+print("orca=%d" % len([c for c in ups if "orca/agent-hooks" in c]))
+PYEOF
+)
+  echo "$upg_report" | tr '\n' ' '; echo
+  if [ "$upg_rc" = 0 ] \
+     && printf '%s' "$upg_report" | grep -q 'count=1' \
+     && printf '%s' "$upg_report" | grep -q 'stale=0' \
+     && printf '%s' "$upg_report" | grep -q 'bash=1' \
+     && printf '%s' "$upg_report" | grep -q 'orca=1'; then
+    pass "install.sh replaced its own stale /bin/sh entry with the bash form, left Orca's alone"
+  else
+    fail "install.sh did not upgrade its stale entry (rc=$upg_rc)" "$upg_report"
+  fi
+else
+  echo "SKIP  python3 not available — cannot inspect the merged settings.json"
+fi
 
 # ===========================================================================
 group "doctor.sh on a single-line (minified) settings.json"

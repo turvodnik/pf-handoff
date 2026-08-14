@@ -293,6 +293,22 @@ out="$(env -u TOOLS -u CLAIMS_FILE bash "$WORK/чужое/skills/pf-handoff/scri
 if [ $rc -eq 2 ]; then pass=$((pass+1)); printf '  ✅ %-52s → ВНИМАНИЕ (rc=2)\n' "TOOLS не задан, вычисленный корень пуст"
 else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "TOOLS не задан, корень пуст" "$rc" "$out"; fi
 
+# Тот же класс, но в форме, которую получает ЧУЖОЙ пользователь дистрибутива
+# (🟡 независимого QA v1.10.0): установщик кладёт скилл КОПИЕЙ в
+# ~/.claude/skills/pf-handoff/, симлинк-цепочки нет, и «четыре уровня вверх»
+# дают корень = $HOME. Если у человека при этом есть ~/.agents/runtime (у
+# пользователя глобального канона он заводится сам), прежний код отвечал
+# спокойным «держаний нет» — успокоение поверх заведомо неверного корня, то
+# самое «не смог проверить» под видом «проверил, чисто». Отличие от пробы выше
+# ровно одно: каталог .agents/runtime на месте, признака мастерской нет.
+mk "$WORK/домашний/.claude/skills/pf-handoff/scripts"
+mk "$WORK/домашний/.agents/runtime"
+cp "$SCRIPT" "$WORK/домашний/.claude/skills/pf-handoff/scripts/claims-check.sh"
+out="$(env -u TOOLS -u CLAIMS_FILE bash "$WORK/домашний/.claude/skills/pf-handoff/scripts/claims-check.sh" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
+if [ $rc -eq 2 ] && printf '%s' "$out" | grep -q "не похоже"; then
+    pass=$((pass+1)); printf '  ✅ %-52s → ВНИМАНИЕ (rc=2)\n' "скилл копией в ~/.claude, есть .agents/runtime"
+else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "скилл копией в ~/.claude, есть .agents/runtime" "$rc" "$(printf '%s' "$out" | head -1)"; fi
+
 # Положительная сторона того же: копия скрипта лежит на ШТАТНОЙ глубине
 # (skill-library/skills/pf-handoff/scripts/) внутри фикстуры-мастерской, TOOLS
 # не задан — корень обязан вычислиться верно и найти живую заявку. Без этой

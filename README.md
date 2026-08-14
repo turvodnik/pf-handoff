@@ -26,13 +26,23 @@ A small kit — rules, two skills, and four hooks — that fixes the core pain o
      The bar colour follows the zones (green < 60%, yellow 60–79%, red ≥ 80%); Session/Weekly show your subscription rate limits with time to reset; the branch segment shows lines added/removed this session. Segments degrade gracefully when data is absent. Renders in the Claude Code terminal (other CLIs have no custom-statusline hook; the desktop app doesn't render a status line — the sensor falls back to transcript parsing there).
    - `context-guard.sh` — at thresholds injects a short directive to the model ("checkpoint now", "don't start new large chunks", "full handoff immediately"). Silent otherwise. If the state file is missing it computes the percentage from the session transcript (fallback). **Subagent-aware**: a subagent's tool calls are measured against the *subagent's own* transcript and window, under its own state key — parent warnings are never consumed by subagents.
    - `sessionstart.sh` — after an **auto**-compact immediately tells the agent "here is your cheat-sheet, move the fresh changes from the summary into it and continue"; after a **manual** `/compact` — only a hint (`/pf-resume <slug>`), nothing is loaded by default; on startup/resume it lists active cheat-sheets. Also cleans up state files older than 14 days.
-   - `precompact.sh` — logs every compaction (manual/auto) to `~/.claude/context-state/compacts.log`.
+   - `precompact.sh` — **the gate before compaction**: on every compaction (manual `/compact` and automatic alike) it calls `autocheckpoint.sh` to write a state snapshot, logs the attempt to `~/.claude/context-state/compacts.log`, and **stops the compaction (exit 2) if no snapshot could be written anywhere**. See ["The gate before compaction"](#the-gate-before-compaction) below — it is the one part of this kit that can say "no".
+   - `autocheckpoint.sh` — not registered in `settings.json`; the two hooks above call it directly. It assembles the snapshot `<project>/.agents/runtime/handoff/<date>-auto-<session>.md` from facts on disk (branch, uncommitted changes, last commits, open task packets, live cheat-sheets, the last human turns, window fill). It is *not* a `pf-handoff` checkpoint — a script cannot tell what is proven from what is merely claimed; it only guarantees that compaction never happens over nothing.
 
 The whole harness costs **≈180 tokens per session worst-case** (all injections are short and fire once per threshold).
 
+### The gate before compaction
+
+Compaction is the moment state is lost, so since v1.10.0 it does not happen without a snapshot. Most of the time you never notice: the snapshot is written, the hook is silent, compaction proceeds.
+
+- **When it blocks.** Only when the snapshot could not be written **anywhere**: the project directory is unwritable *and* so is the emergency directory `~/.claude/context-state/handoff`; or `autocheckpoint.sh` is missing next to `precompact.sh`; or neither `jq` nor `python3` is on `PATH` (with no JSON reader the session cannot be named, so no snapshot can be written); or the payload could not be parsed at all. A **subagent** session writes no snapshot by design and is never blocked.
+- **What you see.** A `[COMPACTION STOPPED]` message on stderr naming the reason and the ways out, and a line in `~/.claude/context-state/compacts.log` (`OK <file>`, `BLOCKED-no-checkpoint`, `SKIPPED-subagent`, `SKIPPED-empty-stdin`).
+- **Ways out**, in order: run the `pf-handoff` skill by hand (a full checkpoint — after it, compacting loses nothing); fix write permissions on `<project>/.agents/runtime/handoff` and `~/.claude/context-state/handoff`; install `jq` or `python3`; as a last resort delete the `PreCompact` entry from `~/.claude/settings.json` — compaction is unblocked immediately, and the safety net goes with it.
+- **Why a hard stop rather than a warning**: compacting while nothing was preserved is exactly the loss this kit exists to prevent, and a warning nobody reads looks identical to success.
+
 ## Installation (3 steps + check)
 
-Requirements: macOS/Linux, bash, `python3` or `jq` (either one is enough). Claude Code with hooks and statusline support.
+Requirements: macOS/Linux, **bash** (the installer registers the hooks naming the interpreter explicitly, because on Debian/Ubuntu `/bin/sh` is dash and cannot read these scripts; with no bash on `PATH` the hooks self-disable instead of blocking anything), `python3` or `jq` (either one is enough — the gate above needs one of them). Claude Code with hooks and statusline support.
 
 ```bash
 git clone https://github.com/turvodnik/pf-handoff.git
@@ -47,7 +57,7 @@ The one manual step: **paste the contents of `docs/rules-section.md`** at the en
 Notes:
 - The skills are installed as **copies**, so you may move or delete the clone afterwards; to update, `git pull && bash install.sh`. The hook entries in settings.json point at the clone's `hooks/` directory — if you move the clone, re-run `bash install.sh` from the new location.
 - If a skill already exists as a **symlink** (you manage skills with your own tooling), the installer skips it and says so.
-- Everything is idempotent: re-running creates no duplicates.
+- Everything is idempotent: re-running creates no duplicates. Since v1.10.0 the installer also **rewrites its own outdated hook entries** instead of leaving them alone — updating from v1.9.0 or earlier, run `bash install.sh` once, otherwise the old registration (which broke every hook on Debian/Ubuntu) would stay in your `settings.json`.
 
 Uninstall: restore the settings.json backup and delete the two skill folders.
 

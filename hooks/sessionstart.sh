@@ -3,6 +3,13 @@
 # Контракт: НИКОГДА не падать и не блокировать сессию (see statusline.sh header).
 set -u
 
+# Тот же контракт, что в statusline.sh/context-guard.sh/doctor.sh (F-20): под
+# `set -u` голый $HOME в среде без HOME — это «unbound variable», то есть смерть
+# скрипта. Наружу это выглядело как rc=0 и пустой вывод — «живых шпаргалок
+# нет», хотя они есть: подхват HANDOFF молча терялся. Этот хук был последним
+# без PF_EFFECTIVE_HOME.
+PF_EFFECTIVE_HOME="${HOME:-${TMPDIR:-/tmp}}"
+
 run() {
   local input
   input=$(cat)
@@ -33,14 +40,14 @@ print("\x1f".join([str(d.get("source") or ""), str(d.get("cwd") or ""), str(d.ge
   esac
 
   # Лёгкая уборка раз в сессию: state-файлы старше 14 суток никому не нужны.
-  find "$HOME/.claude/context-state" -name '*.json' -mtime +14 -delete 2>/dev/null
+  find "$PF_EFFECTIVE_HOME/.claude/context-state" -name '*.json' -mtime +14 -delete 2>/dev/null
 
   # Ручной /compact отличаем от автокомпакта по свежей записи precompact.sh:
   # manual — человек действовал осознанно, ему хватит подсказки без автозагрузки;
   # auto — работа шла полным ходом, состояние надо подхватить немедленно.
   local trigger=""
-  if [ "$source" = "compact" ] && [ -n "${sid:-}" ] && [ -f "$HOME/.claude/context-state/compacts.log" ]; then
-    trigger=$(tail -n 50 "$HOME/.claude/context-state/compacts.log" 2>/dev/null | awk -v s="$sid" '$2==s {t=$3} END {print t}')
+  if [ "$source" = "compact" ] && [ -n "${sid:-}" ] && [ -f "$PF_EFFECTIVE_HOME/.claude/context-state/compacts.log" ]; then
+    trigger=$(tail -n 50 "$PF_EFFECTIVE_HOME/.claude/context-state/compacts.log" 2>/dev/null | awk -v s="$sid" '$2==s {t=$3} END {print t}')
   fi
 
   local project_dir handoff_dir

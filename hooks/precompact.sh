@@ -23,9 +23,24 @@ PF_EFFECTIVE_HOME="${HOME:-${TMPDIR:-/tmp}}"
 
 # rc=0 — сжатие разрешено, rc=2 — заблокировано.
 run() {
-  local input
+  local input ts log_dir
   input=$(cat)
-  [ -z "$input" ] && return 0
+
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  log_dir="$PF_EFFECTIVE_HOME/.claude/context-state"
+  mkdir -p "$log_dir" 2>/dev/null
+
+  # Совсем пустой вход (нулевой длины) — не событие сжатия: харнесс всегда даёт
+  # JSON, а обёртка регистрации при недоступном скрипте вход просто сливает, не
+  # вызывая хук. Блокировать здесь нельзя — это ровно тот клин, который на
+  # Debian устраивала регистрация через /bin/sh: среда, где вход не доехал,
+  # запирала бы КАЖДОЕ сжатие. Но и молчать нельзя: раньше эта ветка уходила в
+  # rc=0, не оставляя ни снимка, ни строки в журнале, и постфактум было не
+  # узнать, что страховка не сработала. Поэтому — след в журнале и rc=0.
+  if [ -z "$input" ]; then
+    printf '%s ? ? ? SKIPPED-empty-stdin (no payload — compaction allowed, no snapshot)\n' "$ts" >> "$log_dir/compacts.log"
+    return 0
+  fi
 
   local has_jq=0
   command -v jq >/dev/null 2>&1 && has_jq=1
@@ -47,11 +62,6 @@ print("\x1f".join([str(d.get("session_id") or ""), str(d.get("trigger") or ""), 
   fi
   IFS=$'\x1f' read -r session_id trigger cwd_in transcript_path <<< "$row"
 
-  local ts log_dir
-  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  log_dir="$PF_EFFECTIVE_HOME/.claude/context-state"
-  mkdir -p "$log_dir" 2>/dev/null
-
   # --- обязательный снимок перед сжатием -----------------------------------
   local ac="$HOOK_DIR/autocheckpoint.sh" snap="" rc=0
   if [ -f "$ac" ] && [ -r "$ac" ]; then
@@ -66,22 +76,39 @@ print("\x1f".join([str(d.get("session_id") or ""), str(d.get("trigger") or ""), 
 
   if [ "$rc" -ne 0 ]; then
     printf '%s %s %s %s BLOCKED-no-checkpoint\n' "$ts" "${session_id:-?}" "${trigger:-?}" "${cwd_in:-?}" >> "$log_dir/compacts.log"
+    # Единственный текст, который обязан прочитать застрявший человек, — и он
+    # в EN-дистрибутиве обязан быть английским (конвенция T-032: что видит
+    # чужой пользователь — EN, короткая русская строка рядом). Внутренний
+    # номер правила (I-036) убран: снаружи он нигде не расшифрован, поэтому
+    # правило сказано словами.
     cat >&2 <<EOF
-[СЖАТИЕ ОСТАНОВЛЕНО] Авто-снимок состояния сессии записать НЕ удалось
-(каталог проекта и аварийный каталог недоступны для записи, либо отсутствует
-autocheckpoint.sh рядом с precompact.sh).
+[COMPACTION STOPPED] pf-handoff could not write the automatic session snapshot
+(the project directory and the emergency directory are both unwritable, or
+autocheckpoint.sh is missing next to precompact.sh, or neither jq nor python3
+is installed, so the session id could not be read).
 
-Сжимать контекст сейчас нельзя: правило I-036 — потерять состояние хуже, чем
-не сжать. Что делать человеку или агенту:
-  1. выполнить pf-handoff руками (полный чекпоинт состояния);
-  2. починить запись (права на <проект>/.agents/runtime/handoff и на
+Compacting now would drop the session state with nothing saved — worse than not
+compacting at all. What you (or the agent) can do:
+  1. run the pf-handoff skill by hand (a full state checkpoint);
+  2. fix write access (<project>/.agents/runtime/handoff and
      ~/.claude/context-state/handoff);
-  3. повторить сжатие.
+  3. install jq or python3 if neither is present;
+  4. then compact again.
+
+(RU) Сжатие остановлено: авто-снимок состояния записать не удалось — сделай
+pf-handoff руками или почини запись, потом повтори сжатие.
 EOF
     return 2
   fi
 
-  printf '%s %s %s %s OK %s\n' "$ts" "${session_id:-?}" "${trigger:-?}" "${cwd_in:-?}" "${snap:-?}" >> "$log_dir/compacts.log"
+  # Пустой $snap при rc=0 бывает ровно в одном случае: сессия субагента, где
+  # снимок сознательно не пишется (autocheckpoint.sh). Раньше строка выглядела
+  # как «OK ?» — читалось как «снимок сделан», хотя файла нет.
+  if [ -z "$snap" ]; then
+    printf '%s %s %s %s SKIPPED-subagent (no snapshot by design)\n' "$ts" "${session_id:-?}" "${trigger:-?}" "${cwd_in:-?}" >> "$log_dir/compacts.log"
+    return 0
+  fi
+  printf '%s %s %s %s OK %s\n' "$ts" "${session_id:-?}" "${trigger:-?}" "${cwd_in:-?}" "$snap" >> "$log_dir/compacts.log"
   return 0
 }
 
