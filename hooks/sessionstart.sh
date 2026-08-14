@@ -59,8 +59,16 @@ print("\x1f".join([str(d.get("source") or ""), str(d.get("cwd") or ""), str(d.ge
   listing=""
   for f in "$handoff_dir"/*.md; do
     [ -f "$f" ] || continue
-    mtime=$(stat -f %m "$f" 2>/dev/null) || continue
-    [ -z "$mtime" ] && continue
+    # Время правки файла: у BSD/macOS `stat -f %m`, у GNU/Linux `stat -c %Y` —
+    # это РАЗНЫЕ программы с одинаковым именем. Раньше стояла только BSD-форма,
+    # и на Linux каждый файл молча выпадал из списка: подхват HANDOFF там не
+    # работал вообще, а выглядело это как «живых шпаргалок нет» (I-036 —
+    # «не смог проверить» обязано отличаться от «проверил, чисто»).
+    mtime=$(stat -f %m "$f" 2>/dev/null) || mtime=""
+    # Проверяем не код возврата, а РЕЗУЛЬТАТ: GNU-шный stat при `-f` печатает
+    # сведения о файловой системе, то есть «успех» с непригодным выводом.
+    case "$mtime" in ''|*[!0-9]*) mtime=$(stat -c %Y "$f" 2>/dev/null) || mtime="" ;; esac
+    case "$mtime" in ''|*[!0-9]*) continue ;; esac
     if [ "$mtime" -lt "$cutoff" ] 2>/dev/null; then continue; fi
     # Смотрим ТОЛЬКО frontmatter (между первой и второй «---»): строка
     # «status: active» в теле файла не должна оживлять closed-шпаргалку.

@@ -199,12 +199,20 @@ else
 fi
 
 # ===========================================================================
-group "hooks never crash: garbage stdin x {jq-only, python3-only, neither} x env -u HOME"
+group "non-blocking hooks never crash: garbage stdin x {jq-only, python3-only, neither} x env -u HOME"
 # ===========================================================================
 # Three curated PATH variants isolate which JSON reader branch actually ran
 # (context-guard.sh and statusline.sh both branch on `command -v jq`) — a dev
 # machine with jq installed would otherwise never exercise the python3-only
 # branch at all.
+#
+# precompact.sh is NOT in this group any more, and that is a contract change,
+# not a relaxation. It is the one hook allowed to stop something: since the
+# compaction gate landed, "the snapshot was not written" must produce exit 2
+# (documented as "blocks compaction") instead of a silent rc=0. Its own
+# group below asserts the stricter behavior — blocked AND loud — plus the
+# positive control that it stays out of the way when the snapshot succeeds.
+# The three hooks left here still owe the old promise: never interfere.
 BASE_TOOLS="bash cat date dirname mkdir sed grep tr printf mv rm mktemp head tail sort wc find"
 mkminpath() {
   local d="$1"; shift
@@ -229,7 +237,7 @@ for variant_name in jq-only python3-only neither; do
     python3-only) mp="$MP_PY" ;;
     neither) mp="$MP_NONE" ;;
   esac
-  for hook in statusline.sh context-guard.sh sessionstart.sh precompact.sh; do
+  for hook in statusline.sh context-guard.sh sessionstart.sh; do
     home_ok="$(mktempdir)"
     out=$(printf 'garbage \x00 not json { [' | PATH="$mp" HOME="$home_ok" "$mp/bash" "$HOOKS_DIR/$hook" 2>&1)
     rc=$?
@@ -249,6 +257,96 @@ for variant_name in jq-only python3-only neither; do
     fi
   done
 done
+
+# ===========================================================================
+group "precompact.sh gate: blocks loudly without a snapshot, stays out of the way with one"
+# ===========================================================================
+# The contract this group pins down (decided in T-033, documented in
+# docs/context-rules.md "Automatic snapshot and the gate before compaction"):
+#
+#   * snapshot written        -> rc=0, silent, compaction proceeds;
+#   * snapshot NOT written    -> rc=2 AND a human-readable reason on stderr.
+#     Silence would be the failure this gate exists to prevent: compacting
+#     while nothing was preserved, and looking exactly like success.
+#
+# Unparseable stdin lands in the second case on purpose. Without a JSON
+# reader (or with a payload that isn't JSON) there is no session id, so
+# there is nothing to name a snapshot file after — "could not check" is not
+# "checked, clean", so it blocks. That is also why the `neither` PATH
+# variant below blocks even on a perfectly valid payload: jq or python3 is
+# effectively a requirement of the gate, and this test states it out loud
+# rather than leaving it to be discovered on a bare machine.
+BLOCK_MARK="СЖАТИЕ ОСТАНОВЛЕНО"
+GOOD_PAYLOAD='{"session_id":"t033-gate","trigger":"manual","cwd":"","transcript_path":""}'
+
+for variant_name in jq-only python3-only neither; do
+  case "$variant_name" in
+    jq-only) mp="$MP_JQ" ;;
+    python3-only) mp="$MP_PY" ;;
+    neither) mp="$MP_NONE" ;;
+  esac
+
+  # --- garbage stdin: no session id -> no snapshot -> blocked, loudly ------
+  home_ok="$(mktempdir)"
+  out=$(printf 'garbage \x00 not json { [' | PATH="$mp" HOME="$home_ok" "$mp/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
+  rc=$?
+  case "$out" in *"$BLOCK_MARK"*) loud=1 ;; *) loud=0 ;; esac
+  if [ "$rc" = 2 ] && [ "$loud" = 1 ]; then
+    pass "precompact.sh ($variant_name, garbage stdin, HOME set) -> rc=2 + reason on stderr"
+  else
+    fail "precompact.sh ($variant_name, garbage stdin, HOME set) -> rc=$rc, loud=$loud" "$out"
+  fi
+
+  home_nohome="$(mktempdir)"
+  out=$(printf 'more garbage' | env -u HOME PATH="$mp" TMPDIR="$home_nohome" "$mp/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
+  rc=$?
+  case "$out" in *"$BLOCK_MARK"*) loud=1 ;; *) loud=0 ;; esac
+  if [ "$rc" = 2 ] && [ "$loud" = 1 ]; then
+    pass "precompact.sh ($variant_name, garbage stdin, env -u HOME) -> rc=2 + reason on stderr"
+  else
+    fail "precompact.sh ($variant_name, garbage stdin, env -u HOME) -> rc=$rc, loud=$loud" "$out"
+  fi
+
+  # --- valid payload, writable HOME ---------------------------------------
+  # With a parser: the snapshot lands in the emergency directory (cwd is
+  # empty, so the project path is skipped) and compaction goes ahead.
+  # Without one: same block as garbage, and for the same honest reason.
+  home_good="$(mktempdir)"
+  out=$(printf '%s' "$GOOD_PAYLOAD" | PATH="$mp" HOME="$home_good" "$mp/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
+  rc=$?
+  snap_dir="$home_good/.claude/context-state/handoff"
+  snap_count=$(find "$snap_dir" -name '*t033-gate*.md' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$variant_name" = neither ]; then
+    case "$out" in *"$BLOCK_MARK"*) loud=1 ;; *) loud=0 ;; esac
+    if [ "$rc" = 2 ] && [ "$loud" = 1 ] && [ "$snap_count" = 0 ]; then
+      pass "precompact.sh (neither, valid payload) -> rc=2 + reason: no jq/python3 means no snapshot is possible"
+    else
+      fail "precompact.sh (neither, valid payload) -> rc=$rc, loud=$loud, snapshots=$snap_count" "$out"
+    fi
+  else
+    if [ "$rc" = 0 ] && [ -z "$out" ] && [ "$snap_count" = 1 ]; then
+      pass "precompact.sh ($variant_name, valid payload, writable HOME) -> rc=0, silent, snapshot written"
+    else
+      fail "precompact.sh ($variant_name, valid payload) -> rc=$rc, snapshots=$snap_count" "$out"
+    fi
+  fi
+done
+
+# --- negative control: the gate must go red when writing is impossible -----
+# Nothing about the payload changes — only the writability of the one place
+# the snapshot could land. If this stayed rc=0, the passes above would be
+# proving nothing but "the hook exits 0 a lot".
+home_ro="$(mktempdir)"
+chmod 500 "$home_ro"
+out=$(printf '%s' "$GOOD_PAYLOAD" | PATH="$MP_JQ" HOME="$home_ro" "$MP_JQ/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
+rc=$?
+chmod 700 "$home_ro"
+case "$out" in *"$BLOCK_MARK"*) loud=1 ;; *) loud=0 ;; esac
+if [ "$rc" = 2 ] && [ "$loud" = 1 ]; then
+  pass "negative control: same valid payload into a read-only HOME -> rc=2 + reason on stderr"
+else
+  fail "negative control: read-only HOME -> rc=$rc, loud=$loud" "$out"
+fi
 
 # ===========================================================================
 group "install.sh is idempotent (double run into a sandbox settings.json)"
