@@ -50,6 +50,18 @@ if [ "$tp_diff_markers" != 2 ] || ! grep -qxF "$NEW_HOOKS_LINE" "$TP_DST"; then
   exit 3
 fi
 
+# tests/claims-check-probes.sh (T-030) — батарея скрипта заявок. Приём тот же,
+# что у threshold-parity.sh выше: канон лежит в skill-library/tests/ (самотесты
+# мастерской), а здесь tests/ соседствует со skills/. Адаптация пути НЕ нужна —
+# батарея ищет скрипт по `$TESTS_DIR/../skills/pf-handoff/scripts/…`, и в этом
+# дистрибутиве такой путь верен сам по себе. Без этой пересадки наружу уезжал бы
+# claims-check.sh без единого своего теста (находка гейта §6, 14.08).
+CP_SRC="$TOOLS/skill-library/tests/claims-check-probes.sh"
+[ -f "$CP_SRC" ] || { echo "ОШИБКА: не найден $CP_SRC" >&2; exit 2; }
+mkdir -p "$HERE/tests"
+cp "$CP_SRC" "$HERE/tests/claims-check-probes.sh"
+chmod +x "$HERE/tests/claims-check-probes.sh"
+
 # docs/context-rules.md (EN) — читаемая человеком копия reference скилла. Канон скилла
 # теперь на английском, поэтому ГЕНЕРИРУЕТСЯ английский док; правкам руками не подлежит:
 # три копии одного текста (канон → скилл → docs) иначе гарантированно разъезжаются.

@@ -157,6 +157,22 @@ else
 fi
 
 # ===========================================================================
+group "claims-check-probes.sh (T-030): write-claim matching, hostile battery"
+# ===========================================================================
+cc_probes="$TESTS_DIR/claims-check-probes.sh"
+if [ ! -f "$cc_probes" ]; then
+  fail "claims-check-probes.sh missing — claims-check.sh would ship untested"
+else
+  cc_out=$("$BASH_BIN" "$cc_probes" 2>&1); cc_rc=$?
+  echo "$cc_out" | tail -3
+  if [ "$cc_rc" = 0 ] && printf '%s' "$cc_out" | grep -q 'провалено 0$'; then
+    pass "claims-check-probes.sh: $(printf '%s' "$cc_out" | tail -1)"
+  else
+    fail "claims-check-probes.sh: not green (rc=$cc_rc)" "$(printf '%s' "$cc_out" | grep '❌' | head -5)"
+  fi
+fi
+
+# ===========================================================================
 group "drift-check.sh level 1 (T-022, I-024): this repo vs a fresh sync-from-tools.sh"
 # ===========================================================================
 # Only meaningful in a dev clone under _tools/repos/pf-handoff, where the

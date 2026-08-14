@@ -21,14 +21,26 @@
 # по-настоящему: expanduser → абсолютизация от папки проектов → realpath
 # (снимает симлинки, `..`, `.`, двойные и хвостовые слэши) → NFC → регистр.
 #
+# Что именно приводится к канону: разные ЗАПИСИ одного и того же пути. Разный
+# смысл одной записи привести нельзя, и скрипт этого не обещает: относительный
+# путь файл заявок отсчитывает от папки проектов, а человек в оболочке — от
+# текущего каталога. Если эти два прочтения расходятся, скрипт говорит об этом
+# вслух (`ВНИМАНИЕ, относительный путь неоднозначен`) и проверяет ОБА, а не
+# выбирает одно молча.
+#
 # Использование:
 #   claims-check.sh <область>
-#     <область> — путь, который берёшь на запись: абсолютный, относительный
-#     (от папки проектов), с `~`, с `..` — любая форма, скрипт приведёт сам.
+#     <область> — путь, который берёшь на запись. Любая ЗАПИСЬ пути годится
+#     (абсолютный, с `~`, с `..`, `./`, лишними слэшами, симлинками, в любом
+#     регистре и форме Unicode). Относительный отсчитывается от папки проектов
+#     — как в файле заявок; неоднозначный даёт `ВНИМАНИЕ`. Однозначный ответ
+#     даёт абсолютный путь.
 #   Переменные окружения (обе необязательны):
 #     TOOLS       — корень мастерской; по умолчанию вычисляется из места самого
 #                   скрипта, поэтому незаданная переменная больше не может
 #                   построить неверный путь и ответить успокаивающим «свободно».
+#                   Заданная ВРУЧНУЮ и неверная — тоже: при перекрытии
+#                   отсутствие файла заявок даёт `ВНИМАНИЕ`, а не «держаний нет».
 #     CLAIMS_FILE — файл заявок целиком (перекрывает TOOLS).
 
 set -uo pipefail
@@ -91,8 +103,13 @@ base = os.path.dirname(tools)
 claims = os.environ.get("CLAIMS_FILE", "").strip()
 if claims:
     claims = os.path.expanduser(claims)
+    tools_src = "переменная CLAIMS_FILE"
 else:
     claims = os.path.join(tools, ".agents", "runtime", "claims.md")
+
+# Путь к файлу заявок задан руками (TOOLS или CLAIMS_FILE) — значит его никто
+# не проверял; спокойная ветка «файла ещё не заводили» на него не полагается.
+overridden = tools_src != "вычислен из места скрипта"
 
 
 # ---- складывать ли регистр: спрашиваем не операционную систему, а саму
@@ -115,19 +132,51 @@ def fs_case_insensitive(path):
 FOLD = fs_case_insensitive(tools if os.path.exists(tools) else base)
 
 
-def canon(raw):
-    """Любая форма пути → одна каноническая строка для сравнения."""
-    s = unicodedata.normalize("NFC", raw.strip())
-    s = os.path.expanduser(s)
-    if not os.path.isabs(s):
-        s = os.path.join(base, s)
+def canon_one(path):
+    """Одна абсолютная запись пути → каноническая строка для сравнения."""
     # realpath снимает симлинки, `..`, `.`, двойные и хвостовые слэши и
     # работает с ещё НЕ созданными путями: заявку подают до создания файлов.
-    s = os.path.realpath(s)
+    s = os.path.realpath(path)
     # macOS отдаёт кириллицу в путях то в NFC, то в NFD — один и тот же файл
     # двумя разными строками. Приводим к одной форме.
     s = unicodedata.normalize("NFC", s)
     return s.lower() if FOLD else s
+
+
+def canon(raw, from_cwd=False):
+    """Запись пути → список канонических форм + предупреждение о неоднозначности.
+
+    Форм больше одной ровно в одном случае: ОБЛАСТЬ задана относительным путём,
+    и два законных прочтения расходятся. Файл заявок отсчитывает относительный
+    путь от папки проектов, оболочка человека — от текущего каталога; молча
+    выбрать одно из двух — это и есть тихое «свободно» поверх живой заявки.
+    Строки САМОГО файла заявок читаются только от папки проектов (from_cwd
+    False): у них форма задокументирована, и текущий каталог проверяющего к их
+    смыслу отношения не имеет — иначе законная строка «_tools/AGENTS.md» кричала
+    бы `ВНИМАНИЕ` при каждом прогоне из любого проекта.
+    """
+    s = unicodedata.normalize("NFC", raw.strip())
+    s = os.path.expanduser(s)
+    if os.path.isabs(s):
+        return [canon_one(s)], None
+    from_base = os.path.join(base, s)
+    forms = [canon_one(from_base)]
+    if not from_cwd:
+        return forms, None
+    try:
+        cwd = os.getcwd()
+    except OSError as exc:
+        return forms, ("ВНИМАНИЕ, текущий каталог не определяется (%s), а путь «%s» "
+                       "относительный — дай абсолютный" % (exc, raw.strip()))
+    alt = os.path.join(cwd, s)
+    alt_c = canon_one(alt)
+    if alt_c == forms[0]:
+        return forms, None
+    forms.append(alt_c)
+    return forms, ("ВНИМАНИЕ, относительный путь неоднозначен: «%s» — это «%s» "
+                   "(от папки проектов, как в файле заявок) или «%s» (от текущего "
+                   "каталога)? Проверил ОБА прочтения; чтобы ответ был один, "
+                   "дай абсолютный путь" % (raw.strip(), from_base, alt))
 
 
 def overlaps(a, b):
@@ -136,28 +185,49 @@ def overlaps(a, b):
     return a == b or a.startswith(b + os.sep) or b.startswith(a + os.sep)
 
 
+def any_overlap(scopes, claims_forms):
+    """Пересеклось хотя бы одно прочтение области с одним прочтением заявки.
+    Сознательно консервативно: у неоднозначной области ЗАНЯТО печатается и
+    тогда, когда пересекается только прочтение «от текущего каталога»."""
+    return any(overlaps(s, c) for s in scopes for c in claims_forms)
+
+
 if not raw_scope.strip():
     warn.append("ВНИМАНИЕ, не задана область, которую берёшь на запись: "
                 "claims-check.sh <путь>")
     finish()
 
 try:
-    scope_c = canon(raw_scope)
+    scope_forms, ambiguous = canon(raw_scope, from_cwd=True)
 except (OSError, ValueError) as exc:
     warn.append("ВНИМАНИЕ, не удалось разобрать твою область «%s» (%s) — "
                 "читай файл заявок глазами" % (raw_scope, exc))
     finish()
 
+if ambiguous:
+    warn.append(ambiguous)
+
 # ---- файла заявок нет. Спокойный ответ допустим ТОЛЬКО когда каталог
-# .agents/runtime на месте и по пути не битый симлинк: иначе опечатка в TOOLS,
-# указывающая на любой существующий каталог, вернула бы тихое «свободно».
+# .agents/runtime на месте, по пути не битый симлинк И корень ВЫЧИСЛЕН, а не
+# перекрыт руками: каталог `.agents/runtime` есть по §9 у каждого проекта,
+# поэтому опечатка вроде `TOOLS=$(pwd)` иначе вернула бы спокойное «держаний
+# нет» поверх живых заявок в настоящем файле.
 if not os.path.isfile(claims):
     runtime_dir = os.path.dirname(claims)
-    if os.path.isdir(runtime_dir) and not os.path.islink(claims):
+    if os.path.isdir(runtime_dir) and not os.path.islink(claims) and not overridden:
+        if warn:
+            finish()   # неоднозначная область важнее спокойного ответа
         print("держаний нет: файла заявок ещё не заводили (%s)" % claims)
         sys.exit(0)
-    warn.append("ВНИМАНИЕ, файла заявок нет по пути %s — проверь TOOLS (%s: %s) "
-                "и не битый ли там симлинк" % (claims, tools_src, tools))
+    if overridden:
+        warn.append("ВНИМАНИЕ, файла заявок нет по пути %s, а он задан вручную "
+                    "(%s) — перекрытая переменная запросто указывает на чужой "
+                    "проект, где .agents/runtime тоже есть. Проверь путь; если "
+                    "мастерская правда новая — заведи файл (touch %s)"
+                    % (claims, tools_src, claims))
+    else:
+        warn.append("ВНИМАНИЕ, файла заявок нет по пути %s — проверь TOOLS (%s: %s) "
+                    "и не битый ли там симлинк" % (claims, tools_src, tools))
     finish()
 
 try:
@@ -172,7 +242,9 @@ live = False
 seen = False
 
 for line in lines:
-    if line.startswith(SECTION):
+    # Заголовок сверяется ДОСЛОВНО: «## Живые заявки (архив)» — это уже не
+    # живая секция, а история под похожим именем.
+    if line.strip() == SECTION:
         live, seen = True, True
         continue
     if line.startswith("## "):
@@ -190,11 +262,21 @@ for line in lines:
 
     scope, expires = fields[0], re.sub(r"^истекает ", "", fields[4])
 
+    if not scope.strip():
+        warn.append("ВНИМАНИЕ, в строке пустая область (первое поле): " + line)
+        continue
     if " + " in scope:
         warn.append("ВНИМАНИЕ, составная область, одна строка = один путь: " + line)
         continue
+    # Форма проверяется регекспом, календарь — strptime: «2026-13-40 25:61»
+    # регексп проходит, а такой даты не бывает, и живой её считать нельзя.
     if not DATE_RE.match(expires):
         warn.append("ВНИМАНИЕ, срок не разобран, нужно YYYY-MM-DD HH:MM: " + line)
+        continue
+    try:
+        datetime.strptime(expires, "%Y-%m-%d %H:%M")
+    except ValueError:
+        warn.append("ВНИМАНИЕ, такой даты нет в календаре: " + line)
         continue
     if expires <= now:
         # Протухшая заявка свободна и молчит: брошенная строка не имеет права
@@ -202,12 +284,12 @@ for line in lines:
         continue
 
     try:
-        claim_c = canon(scope)
+        claim_forms, _ = canon(scope)
     except (OSError, ValueError) as exc:
         warn.append("ВНИМАНИЕ, область заявки не разобрана (%s): %s" % (exc, line))
         continue
 
-    if overlaps(scope_c, claim_c):
+    if any_overlap(scope_forms, claim_forms):
         busy.append("ЗАНЯТО: " + line)
 
 if not seen:
