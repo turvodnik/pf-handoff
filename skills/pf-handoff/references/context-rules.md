@@ -31,43 +31,29 @@ Parallel sessions do not see each other's commands, and "I see no basis for this
 
 - One file for the whole machine: `_tools/.agents/runtime/claims.md`, gitignored. Local-only on purpose — claiming never needs a push, so the claim mechanism itself cannot race.
 - Line format, separator ` · `, local time: `scope · ticket · who · взято YYYY-MM-DD HH:MM · истекает YYYY-MM-DD HH:MM`. The scope may be a path inside the repo when sessions work on disjoint parts (two agents in different subtrees of `_tools` do not conflict). **One path per line** — a composite scope (`a + b`) is forbidden: the check compares whole prefixes and would silently miss the second half (found by the §6 gate on the very first live claim, 14.08).
-- **Canonical scope form: `<repo>/<path>`** — relative to the projects folder (the parent of `TOOLS`), no leading `/` and no `~`: `_tools/AGENTS.md`, `optimize/.agents/journal`. Absolute paths under that root are normalized by the check itself (agents are told to use absolute paths, so refusing them would make the warning ambient noise), and case is folded — macOS filesystems are case-insensitive, so `_Tools/x` and `_tools/x` are the same file. A `~/…` form cannot be resolved and is reported loudly instead of being compared. Without this, one session claiming `_tools/AGENTS.md` and another checking the absolute path of the same file got silence over a live claim (§6 gate, round 3, 14.08).
+- **Scope form: write `<repo>/<path>`** relative to the projects folder (`_tools/AGENTS.md`, `optimize/.agents/journal`) — that is the readable form for the human. Matching no longer depends on it: the check canonicalizes **both sides** for real (`expanduser` → absolutize against the projects folder → `realpath` → NFC → case), so an absolute path, `~/…`, `..`, `./`, doubled or trailing slashes, a symlink on the way and a different Unicode form all resolve to the same claim. String comparison could not do this: four gate rounds produced four different aliases of one path, each one silence over a live claim (§6 gate, rounds 1–4, 13–14.08).
 - **Expiry is mandatory**, default 2h (one packet-session, §9). An expired line is free: the next claimer deletes it and writes its own. No cleanup daemon, no locks — a file a human reads by eye and fixes by hand.
-- Check before the first write (prints live overlapping claims and anything it could not parse; silence = free):
+- Check before the first write — **one command**, any path form:
 
 ```sh
-# Set both first — the check refuses to run half-configured:
-#   TOOLS — the workshop root (here: the _tools checkout), R — what you are taking for writing.
-: "${TOOLS:?не задан корень мастерской (TOOLS)}"
-: "${R:?не задана область, которую берёшь на запись (R)}"
-C="$TOOLS/.agents/runtime/claims.md"
-if [ ! -f "$C" ]; then
-  if [ -d "$TOOLS/.agents/runtime" ] && [ ! -L "$C" ]
-    then echo "держаний нет: файла заявок ещё не заводили ($C)"
-    else echo "ВНИМАНИЕ, файла заявок нет по пути $C — проверь TOOLS и не битый ли там симлинк"
-  fi
-else
-awk -F' · ' -v r="$R" -v base="$(dirname "$TOOLS")/" -v now="$(date '+%Y-%m-%d %H:%M')" '
-  function norm(p) { if (index(p, base) == 1) p = substr(p, length(base) + 1); return tolower(p) }
-  BEGIN {rn = norm(r)}
-  /^## Живые заявки/ {live=1; seen=1; next}
-  /^## / {live=0; next}
-  !live || /^[[:space:]]*$/ {next}
-  NF<5 {print "ВНИМАНИЕ, строка не разобрана (проверь глазами): " $0; next}
-  { ex=$5; sub(/^истекает /,"",ex); sn = norm($1)
-    if ($1 ~ / \+ /) print "ВНИМАНИЕ, составная область, одна строка = один путь: " $0
-    else if (ex !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]$/) print "ВНИМАНИЕ, срок не разобран, нужно YYYY-MM-DD HH:MM: " $0
-    else if (ex <= now) next
-    else if (sn ~ /^[\/~]/ || rn ~ /^[\/~]/) print "ВНИМАНИЕ, область не в форме «<репо>/<путь>», пересечение не проверить: " $0
-    else if (index(sn "/", rn "/") == 1 || index(rn "/", sn "/") == 1) print "ЗАНЯТО: " $0 }
-  END {if (!seen) print "ВНИМАНИЕ, секция «## Живые заявки» не найдена — проверь файл глазами"}' "$C" \
-  || echo "ВНИМАНИЕ, проверка не отработала (rc≠0) — читай файл глазами"
-fi
+~/.claude/skills/pf-handoff/scripts/claims-check.sh "<what you are taking for writing>"
+# ~/.codex/… and ~/.gemini/… are the same file; in a project without the global
+# skill: bash <workshop>/skill-library/skills/pf-handoff/scripts/claims-check.sh
 ```
 
-- **Any `ВНИМАНИЕ` means "stop", not "free"**: treat an unparsed line, an unset variable, a missing section or an unresolvable path form as a possible live claim and look with your eyes. The two calm outputs are silence and «держаний нет» (the claims file was never created, while its directory is there).
-- The check is **loud, not fail-open** — every way it used to lie quietly is closed by the guards above (found by the §6 gate, 14.08): an unset `TOOLS`/`R` used to build a wrong path and answer a reassuring "free"; a date in another format (`14.08.2026 20:20`) parsed as expired; a renamed section made every claim invisible; a scope written in a different form (absolute, `~`, other case) than the one being checked matched nothing; `awk` itself failing (an unreadable file) left stdout empty. A mistyped file must never look like an empty one.
-- Prefixes are compared **at path boundaries** (`_tools/security` does not claim `_tools/security-notes.md`), and the live section ends at the next `## ` heading — lines under an `## Архив` heading are history, not holdings.
+- **Three answers, and never silence** — an empty output can no longer pass for "free":
+  - `ЗАНЯТО` (exit **1**) — a live claim overlaps yours, with who holds it and until when. Stop and ask the human.
+  - `СВОБОДНО` (exit **0**) — the check ran and nothing overlaps. The other calm answer is `держаний нет` (the claims file was never created, while its directory is there).
+  - `ВНИМАНИЕ` (exit **2**) — it could **not** check (an unparsed line, a date in another format, a renamed or missing section, an unreadable file, a claims path that is a broken symlink, an empty scope argument). Treat it exactly like `ЗАНЯТО` and look with your eyes. "I could not check" must never look like "I checked, it is clean" — that one confusion is what the §6 gate returned this packet for in rounds 1–4. Both states print together when both occur; the exit code is `ЗАНЯТО`'s, because both mean "do not write".
+- The claims file is found **without configuration**: the script derives the workshop root from its own location (resolving the symlink chain of the surface it was called through), so a forgotten variable cannot build a wrong path and answer a reassuring "free". `TOOLS` and `CLAIMS_FILE` override it; a derived root with no `.agents/runtime` is `ВНИМАНИЕ`, not "free" — which is what a fresh clone of the public distribution gets until it points `TOOLS` at its own workshop.
+- Prefixes are compared **at path boundaries** (`_tools/security` does not claim `_tools/security-notes.md`, but does claim everything inside it), and the live section ends at the next `## ` heading — lines under an `## Архив` heading are history, not holdings.
+- **Borders, named out loud** (a check that hides its limits is the thing being fixed here):
+  - *Case* is folded only when the volume actually is case-insensitive — probed on this machine, not assumed from the OS name. On macOS `_Tools/x` and `_tools/x` are one file and must fold; on Linux/CI `Data/` and `data/` are two directories and folding would produce a false `ЗАНЯТО`. Cyrillic folds too on every platform (Python `str.lower()`), unlike `tolower` in `mawk`.
+  - *Unicode form*: macOS hands out Cyrillic paths as NFC or NFD depending on how the string was produced; both sides are normalized to NFC, otherwise the same file compares unequal to itself.
+  - *A claim is checked against paths, not against intent*: two sessions writing different lines of one file still collide, and the file is the unit.
+  - The check is a **read-only helper, not a lock**: nothing enforces claiming, and a session that never runs it is invisible to the protocol.
+- The old copy-paste `awk` snippet is **deleted, not kept as a fallback**: it under-promised in four consecutive rounds, and a second implementation of the matching rule is exactly the drift this protocol exists to prevent. The honest fallback is the one the warnings already name — read `claims.md` with your eyes.
+- The script is canon; `doctor-agents.sh` goes red if it is missing from the surfaces or a surface copy has fallen behind canon — that is the price of a file over a snippet, and it is paid by the doctor, not by memory.
 - Someone else's live line overlapping your scope — stop and ask the human; do not "just be careful". Your own work done — delete your line.
 - No "I am alone here" exemption: a session cannot know it is alone — that assumption is exactly what produced I-032. The cost of being wrong is one line that expires by itself in 2h.
 
