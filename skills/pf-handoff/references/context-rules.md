@@ -25,6 +25,25 @@ A state cheat-sheet from which any session can be resumed without loss (template
 - The rules are identical at any depth (grandchildren and below); a subagent running its own wave keeps the registry in its own progress file (ticket/workspace).
 - Swarm in flight while crossing window thresholds: launch no new waves, only accept results. A compaction mid-wait loses nothing: results live in files and agent transcripts, completion notifications reach the compacted session too — the registry says what is still pending and why. A broken-off level is replaced by a successor: it continues from the registry and the result files, without re-asking for what was already accepted.
 
+## Write claims across parallel sessions
+
+Parallel sessions do not see each other's commands, and "I see no basis for this edit" is not proof it lacks one (§8). The claims file is the one place where current holdings are visible. It is NOT stored in the HANDOFF: step 3 of this skill rewrites the HANDOFF whole, so a claim parked there would be erased by contract — and a HANDOFF is per-task, while a claim is per-repository.
+
+- One file for the whole machine: `_tools/.agents/runtime/claims.md`, gitignored. Local-only on purpose — claiming never needs a push, so the claim mechanism itself cannot race.
+- Line format, separator ` · `, local time: `repo-or-path · ticket · who · взято YYYY-MM-DD HH:MM · истекает YYYY-MM-DD HH:MM`. The scope field may be a path inside the repo when sessions work on disjoint parts (two agents in different subtrees of `_tools` do not conflict).
+- **Expiry is mandatory**, default 2h (one packet-session, §9). An expired line is free: the next claimer deletes it and writes its own. No cleanup daemon, no locks — a file a human reads by eye and fixes by hand.
+- Check before the first write (prints live overlapping claims, silence = free):
+
+```sh
+R=_tools; awk -F' · ' -v r="$R" -v now="$(date '+%Y-%m-%d %H:%M')" \
+  'NF>=5 {s=$1; sub(/^взято /,"",$4); sub(/^истекает /,"",$5); \
+   if ((index(s,r)==1 || index(r,s)==1) && $5 > now) print "ЗАНЯТО: " $0}' \
+  "$HOME/Проекты ai/_tools/.agents/runtime/claims.md"
+```
+
+- Someone else's live line overlapping your scope — stop and ask the human; do not "just be careful". Your own work done — delete your line.
+- A single session working alone skips all of this: the cost has no payoff.
+
 ## Window thresholds
 
 Percentages of a context window of any size. Claude receives them automatically via hooks; agents without hooks track them by milestones.
