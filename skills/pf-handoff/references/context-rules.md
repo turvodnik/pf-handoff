@@ -35,19 +35,25 @@ Parallel sessions do not see each other's commands, and "I see no basis for this
 - Check before the first write (prints live overlapping claims and anything it could not parse; silence = free):
 
 ```sh
-C="$TOOLS/.agents/runtime/claims.md"   # $TOOLS — корень мастерской (здесь: _tools)
-R="_tools/AGENTS.md"                   # что берёшь на запись
-[ -f "$C" ] || echo "файла заявок нет — свободно"
+# Set both first — the check refuses to run half-configured:
+#   TOOLS — the workshop root (here: the _tools checkout), R — what you are taking for writing.
+: "${TOOLS:?не задан корень мастерской (TOOLS)}"
+: "${R:?не задана область, которую берёшь на запись (R)}"
+C="$TOOLS/.agents/runtime/claims.md"
+[ -f "$C" ] || echo "ВНИМАНИЕ, файла заявок нет по пути $C — проверь TOOLS; если путь верен, держаний нет"
 [ -f "$C" ] && awk -F' · ' -v r="$R" -v now="$(date '+%Y-%m-%d %H:%M')" '
   /^## Живые заявки/ {live=1; next}
   !live || /^[[:space:]]*$/ {next}
   NF<5 {print "ВНИМАНИЕ, строка не разобрана (проверь глазами): " $0; next}
   { ex=$5; sub(/^истекает /,"",ex)
     if ($1 ~ / \+ /) print "ВНИМАНИЕ, составная область, одна строка = один путь: " $0
-    else if ((index($1,r)==1 || index(r,$1)==1) && ex > now) print "ЗАНЯТО: " $0 }' "$C"
+    else if (ex !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]$/) print "ВНИМАНИЕ, срок не разобран, нужно YYYY-MM-DD HH:MM: " $0
+    else if ((index($1,r)==1 || index(r,$1)==1) && ex > now) print "ЗАНЯТО: " $0 }
+  END {if (!live) print "ВНИМАНИЕ, секция «## Живые заявки» не найдена — проверь файл глазами"}' "$C"
 ```
 
-- The check is **loud, not fail-open**: a malformed line is reported instead of being read as "free" — a mistyped separator must not look like an empty file.
+- **Any `ВНИМАНИЕ` means "stop", not "free"**: treat an unparsed line, an unset variable or a missing section as a possible live claim and look with your eyes.
+- The check is **loud, not fail-open** — and the three ways it used to lie quietly are closed by the guards above (found by the §6 gate, 14.08): an unset `TOOLS`/`R` used to build a wrong path and answer a reassuring "free"; a date in another format (`14.08.2026 20:20`) parsed as expired; a renamed section made every claim invisible. A mistyped file must never look like an empty one.
 - Someone else's live line overlapping your scope — stop and ask the human; do not "just be careful". Your own work done — delete your line.
 - No "I am alone here" exemption: a session cannot know it is alone — that assumption is exactly what produced I-032. The cost of being wrong is one line that expires by itself in 2h.
 
