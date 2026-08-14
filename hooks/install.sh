@@ -21,8 +21,13 @@ STATUSLINE_SH="$SCRIPT_DIR/statusline.sh"
 CONTEXT_GUARD_SH="$SCRIPT_DIR/context-guard.sh"
 SESSIONSTART_SH="$SCRIPT_DIR/sessionstart.sh"
 PRECOMPACT_SH="$SCRIPT_DIR/precompact.sh"
+# Not registered in settings.json — precompact.sh and context-guard.sh call it
+# next to themselves. Checked here all the same: if it is missing, PreCompact
+# treats "no checkpoint" as a reason to BLOCK compaction (T-031), so an install
+# without this file would quietly turn into a wedged session later.
+AUTOCHECKPOINT_SH="$SCRIPT_DIR/autocheckpoint.sh"
 
-for f in "$STATUSLINE_SH" "$CONTEXT_GUARD_SH" "$SESSIONSTART_SH" "$PRECOMPACT_SH"; do
+for f in "$STATUSLINE_SH" "$CONTEXT_GUARD_SH" "$SESSIONSTART_SH" "$PRECOMPACT_SH" "$AUTOCHECKPOINT_SH"; do
   if [ ! -x "$f" ]; then
     echo "install.sh: expected script missing or not executable: $f" >&2
     exit 1

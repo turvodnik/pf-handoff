@@ -209,4 +209,107 @@ else
   fail "context-guard.sh env -u HOME: rc=$gd_rc, announced=${announced_after:-<missing>}" "stdout/stderr: $gd_out"
 fi
 
+# ===========================================================================
+group "T-031: auto-checkpoint at t2 and the compaction gate in PreCompact"
+# ===========================================================================
+# The invariant under test is asymmetric on purpose: a snapshot that CANNOT be
+# written must be loud and must stop compaction (I-036 — compacting with the
+# state lost is worse than not compacting), while an unexpected script fault
+# must never block. Both halves are exercised: success and forced failure.
+AUTOCKPT="$HOOKS_DIR/autocheckpoint.sh"
+PRECOMPACT="$HOOKS_DIR/precompact.sh"
+
+# Failure is forced with chmod 555 on both write targets; as root that is a
+# no-op and the two negative cases would silently pass for the wrong reason.
+IS_ROOT=0; [ "$(id -u)" = "0" ] && IS_ROOT=1
+
+# Seeds a project + sandbox home, fires the guard at `pct`, echoes the emitted
+# additionalContext. Same seeded-state technique as guard_zone() above.
+guard_at() {
+  local proj="$1" home="$2" pct="$3" sid="$4" now
+  mkdir -p "$home/.claude/context-state"
+  now=$(date +%s)
+  printf '{"pct": %s, "window": 1000000, "input_tokens": 800000, "updated": %s, "announced": 0}' \
+    "$pct" "$now" > "$home/.claude/context-state/$sid.json"
+  printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","transcript_path":"/nonexistent.jsonl","cwd":"%s"}' "$sid" "$proj" \
+    | HOME="$home" CLAUDE_SETTINGS_PATH=/nonexistent-thr-parity-settings.json "$BASH_BIN" "$GUARD" 2>/dev/null
+}
+
+if [ ! -f "$AUTOCKPT" ]; then
+  fail "autocheckpoint.sh present next to the hooks" "expected at $AUTOCKPT"
+else
+  pass "autocheckpoint.sh present next to the hooks"
+
+  # --- 1. crossing t2 writes the snapshot with no agent involvement ---------
+  proj=$(mktempdir); home=$(mktempdir); mkdir -p "$proj/.agents"
+  out=$(guard_at "$proj" "$home" 80 "t031a-$$-$RANDOM")
+  snapfile=$(ls "$proj/.agents/runtime/handoff/"*.md 2>/dev/null | head -1)
+  if [ -n "$snapfile" ] && printf '%s' "$out" | grep -q 'Авто-снимок состояния записан сам'; then
+    pass "t2 crossing: snapshot written by the hook itself, path reported to the agent"
+  else
+    fail "t2 crossing: no snapshot" "file=${snapfile:-<none>} out=$out"
+  fi
+
+  # --- 2. the project's context-budget.json still drives it ----------------
+  # 41% is below the default t2=80 but above a configured t2=40: a snapshot
+  # here proves the auto-checkpoint follows the project override, not a
+  # hardcoded 80.
+  proj=$(mktempdir); home=$(mktempdir); mkdir -p "$proj/.agents"
+  printf '%s' '{"thresholds":[30,40,50]}' > "$proj/.agents/context-budget.json"
+  out=$(guard_at "$proj" "$home" 41 "t031b-$$-$RANDOM")
+  snapfile=$(ls "$proj/.agents/runtime/handoff/"*.md 2>/dev/null | head -1)
+  if [ -n "$snapfile" ] && printf '%s' "$out" | grep -q 'Авто-снимок состояния записан сам'; then
+    pass "context-budget.json override [30,40,50]: snapshot fires at 41%, not at 80%"
+  else
+    fail "override did not drive the snapshot" "file=${snapfile:-<none>} out=$out"
+  fi
+
+  # --- 3. subagents are skipped, and a skip is NOT reported as a failure ----
+  proj=$(mktempdir); home=$(mktempdir); mkdir -p "$proj/.agents"
+  out=$(guard_at "$proj" "$home" 80 "agent-abc123")
+  if [ ! -d "$proj/.agents/runtime/handoff" ] && ! printf '%s' "$out" | grep -q 'НЕ УДАЛОСЬ'; then
+    pass "subagent session (agent-*): no snapshot file, and no false failure alarm"
+  else
+    fail "subagent handling wrong" "out=$out"
+  fi
+
+  # --- 4. PreCompact allows compaction once the snapshot exists ------------
+  proj=$(mktempdir); home=$(mktempdir); mkdir -p "$proj/.agents"
+  printf '{"session_id":"t031d-%s","trigger":"manual","cwd":"%s","transcript_path":"/nonexistent.jsonl"}' "$$" "$proj" \
+    | HOME="$home" "$BASH_BIN" "$PRECOMPACT" >/dev/null 2>&1
+  rc=$?
+  snapfile=$(ls "$proj/.agents/runtime/handoff/"*.md 2>/dev/null | head -1)
+  if [ "$rc" -eq 0 ] && [ -n "$snapfile" ]; then
+    pass "PreCompact: snapshot written before compaction, rc=0 (compaction proceeds)"
+  else
+    fail "PreCompact happy path" "rc=$rc file=${snapfile:-<none>}"
+  fi
+
+  # --- 5/6. negative control: snapshot impossible -> loud + no compaction ---
+  if [ "$IS_ROOT" = 1 ]; then
+    fail "negative control skipped: running as root, chmod 555 cannot force a write failure"
+  else
+    proj=$(mktempdir); home=$(mktempdir)
+    mkdir -p "$proj/.agents/runtime/handoff" "$home/.claude/context-state/handoff"
+    chmod 555 "$proj/.agents/runtime/handoff" "$home/.claude/context-state/handoff"
+
+    err=$(printf '{"session_id":"t031e-%s","trigger":"auto","cwd":"%s","transcript_path":"/nonexistent.jsonl"}' "$$" "$proj" \
+      | HOME="$home" "$BASH_BIN" "$PRECOMPACT" 2>&1 >/dev/null)
+    rc=$?
+    if [ "$rc" -eq 2 ] && printf '%s' "$err" | grep -q 'СЖАТИЕ ОСТАНОВЛЕНО'; then
+      pass "negative control: unwritable project AND home -> exit 2 (blocks compaction) + loud stderr"
+    else
+      fail "negative control: compaction was NOT blocked" "rc=$rc stderr=$err"
+    fi
+
+    out=$(guard_at "$proj" "$home" 80 "t031f-$$-$RANDOM")
+    if printf '%s' "$out" | grep -q 'НЕ УДАЛОСЬ' && printf '%s' "$out" | grep -q '/compact'; then
+      pass "negative control: guard at t2 says the snapshot failed and forbids compaction"
+    else
+      fail "guard stayed quiet about a failed snapshot" "out=$out"
+    fi
+    chmod 755 "$proj/.agents/runtime/handoff" "$home/.claude/context-state/handoff" 2>/dev/null
+  fi
+fi
+
 finish

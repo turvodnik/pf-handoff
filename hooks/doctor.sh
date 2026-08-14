@@ -16,8 +16,10 @@ FAIL=0
 ok()   { printf 'OK   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; FAIL=1; }
 
-# 1) all six scripts exist and are executable
-for name in statusline.sh context-guard.sh sessionstart.sh precompact.sh install.sh doctor.sh; do
+# 1) all seven scripts exist and are executable (autocheckpoint.sh is not a
+# registered hook: precompact.sh calls it and blocks compaction when it cannot
+# produce a snapshot, so its absence is a real failure, not cosmetic — T-031)
+for name in statusline.sh context-guard.sh sessionstart.sh precompact.sh autocheckpoint.sh install.sh doctor.sh; do
   if [ -x "$SCRIPT_DIR/$name" ]; then
     ok "script $name exists and is executable"
   else
@@ -117,6 +119,30 @@ if [ -e "$SL_CFG" ]; then
   fi
 else
   ok "status-bar config absent — default look (that is normal)"
+fi
+
+# 7) auto-compact window (T-031): informational, never a failure. A hook cannot
+# start compaction — no such output field exists — so the "compact at 80%" half
+# of the design is the harness setting `autoCompactWindow` (tokens, capped at
+# the model's context window). Unset is legitimate: the session then compacts
+# at the model's limit, and the PreCompact gate still guards that moment.
+acw=""
+if [ "$JSON_READER" = "python3" ]; then
+  acw=$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+except Exception:
+    d = {}
+print(d.get("autoCompactWindow") or "")
+' "$SETTINGS_PATH" 2>/dev/null)
+elif [ "$JSON_READER" = "jq" ]; then
+  acw=$(jq -r '.autoCompactWindow // ""' "$SETTINGS_PATH" 2>/dev/null)
+fi
+if [ -n "$acw" ]; then
+  ok "autoCompactWindow = $acw tokens (compaction starts there; 800000 = 80% of a 1M window)"
+else
+  ok "autoCompactWindow unset — compaction at the model's limit (that is the harness default)"
 fi
 
 exit "$FAIL"
