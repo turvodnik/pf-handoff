@@ -30,7 +30,8 @@ A state cheat-sheet from which any session can be resumed without loss (template
 Parallel sessions do not see each other's commands, and "I see no basis for this edit" is not proof it lacks one (§8). The claims file is the one place where current holdings are visible. It is NOT stored in the HANDOFF: step 3 of this skill rewrites the HANDOFF whole, so a claim parked there would be erased by contract — and a HANDOFF is per-task, while a claim is per-repository.
 
 - One file for the whole machine: `_tools/.agents/runtime/claims.md`, gitignored. Local-only on purpose — claiming never needs a push, so the claim mechanism itself cannot race.
-- Line format, separator ` · `, local time: `repo-or-path · ticket · who · взято YYYY-MM-DD HH:MM · истекает YYYY-MM-DD HH:MM`. The scope may be a path inside the repo when sessions work on disjoint parts (two agents in different subtrees of `_tools` do not conflict). **One path per line** — a composite scope (`a + b`) is forbidden: the check compares whole prefixes and would silently miss the second half (found by the §6 gate on the very first live claim, 14.08).
+- Line format, separator ` · `, local time: `scope · ticket · who · взято YYYY-MM-DD HH:MM · истекает YYYY-MM-DD HH:MM`. The scope may be a path inside the repo when sessions work on disjoint parts (two agents in different subtrees of `_tools` do not conflict). **One path per line** — a composite scope (`a + b`) is forbidden: the check compares whole prefixes and would silently miss the second half (found by the §6 gate on the very first live claim, 14.08).
+- **Canonical scope form: `<repo>/<path>`** — relative to the projects folder (the parent of `TOOLS`), no leading `/` and no `~`: `_tools/AGENTS.md`, `optimize/.agents/journal`. Absolute paths under that root are normalized by the check itself (agents are told to use absolute paths, so refusing them would make the warning ambient noise), and case is folded — macOS filesystems are case-insensitive, so `_Tools/x` and `_tools/x` are the same file. A `~/…` form cannot be resolved and is reported loudly instead of being compared. Without this, one session claiming `_tools/AGENTS.md` and another checking the absolute path of the same file got silence over a live claim (§6 gate, round 3, 14.08).
 - **Expiry is mandatory**, default 2h (one packet-session, §9). An expired line is free: the next claimer deletes it and writes its own. No cleanup daemon, no locks — a file a human reads by eye and fixes by hand.
 - Check before the first write (prints live overlapping claims and anything it could not parse; silence = free):
 
@@ -40,20 +41,33 @@ Parallel sessions do not see each other's commands, and "I see no basis for this
 : "${TOOLS:?не задан корень мастерской (TOOLS)}"
 : "${R:?не задана область, которую берёшь на запись (R)}"
 C="$TOOLS/.agents/runtime/claims.md"
-[ -f "$C" ] || echo "ВНИМАНИЕ, файла заявок нет по пути $C — проверь TOOLS; если путь верен, держаний нет"
-[ -f "$C" ] && awk -F' · ' -v r="$R" -v now="$(date '+%Y-%m-%d %H:%M')" '
-  /^## Живые заявки/ {live=1; next}
+if [ ! -f "$C" ]; then
+  if [ -d "$TOOLS/.agents/runtime" ] && [ ! -L "$C" ]
+    then echo "держаний нет: файла заявок ещё не заводили ($C)"
+    else echo "ВНИМАНИЕ, файла заявок нет по пути $C — проверь TOOLS и не битый ли там симлинк"
+  fi
+else
+awk -F' · ' -v r="$R" -v base="$(dirname "$TOOLS")/" -v now="$(date '+%Y-%m-%d %H:%M')" '
+  function norm(p) { if (index(p, base) == 1) p = substr(p, length(base) + 1); return tolower(p) }
+  BEGIN {rn = norm(r)}
+  /^## Живые заявки/ {live=1; seen=1; next}
+  /^## / {live=0; next}
   !live || /^[[:space:]]*$/ {next}
   NF<5 {print "ВНИМАНИЕ, строка не разобрана (проверь глазами): " $0; next}
-  { ex=$5; sub(/^истекает /,"",ex)
+  { ex=$5; sub(/^истекает /,"",ex); sn = norm($1)
     if ($1 ~ / \+ /) print "ВНИМАНИЕ, составная область, одна строка = один путь: " $0
     else if (ex !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]$/) print "ВНИМАНИЕ, срок не разобран, нужно YYYY-MM-DD HH:MM: " $0
-    else if ((index($1,r)==1 || index(r,$1)==1) && ex > now) print "ЗАНЯТО: " $0 }
-  END {if (!live) print "ВНИМАНИЕ, секция «## Живые заявки» не найдена — проверь файл глазами"}' "$C"
+    else if (ex <= now) next
+    else if (sn ~ /^[\/~]/ || rn ~ /^[\/~]/) print "ВНИМАНИЕ, область не в форме «<репо>/<путь>», пересечение не проверить: " $0
+    else if (index(sn "/", rn "/") == 1 || index(rn "/", sn "/") == 1) print "ЗАНЯТО: " $0 }
+  END {if (!seen) print "ВНИМАНИЕ, секция «## Живые заявки» не найдена — проверь файл глазами"}' "$C" \
+  || echo "ВНИМАНИЕ, проверка не отработала (rc≠0) — читай файл глазами"
+fi
 ```
 
-- **Any `ВНИМАНИЕ` means "stop", not "free"**: treat an unparsed line, an unset variable or a missing section as a possible live claim and look with your eyes.
-- The check is **loud, not fail-open** — and the three ways it used to lie quietly are closed by the guards above (found by the §6 gate, 14.08): an unset `TOOLS`/`R` used to build a wrong path and answer a reassuring "free"; a date in another format (`14.08.2026 20:20`) parsed as expired; a renamed section made every claim invisible. A mistyped file must never look like an empty one.
+- **Any `ВНИМАНИЕ` means "stop", not "free"**: treat an unparsed line, an unset variable, a missing section or an unresolvable path form as a possible live claim and look with your eyes. The two calm outputs are silence and «держаний нет» (the claims file was never created, while its directory is there).
+- The check is **loud, not fail-open** — every way it used to lie quietly is closed by the guards above (found by the §6 gate, 14.08): an unset `TOOLS`/`R` used to build a wrong path and answer a reassuring "free"; a date in another format (`14.08.2026 20:20`) parsed as expired; a renamed section made every claim invisible; a scope written in a different form (absolute, `~`, other case) than the one being checked matched nothing; `awk` itself failing (an unreadable file) left stdout empty. A mistyped file must never look like an empty one.
+- Prefixes are compared **at path boundaries** (`_tools/security` does not claim `_tools/security-notes.md`), and the live section ends at the next `## ` heading — lines under an `## Архив` heading are history, not holdings.
 - Someone else's live line overlapping your scope — stop and ask the human; do not "just be careful". Your own work done — delete your line.
 - No "I am alone here" exemption: a session cannot know it is alone — that assumption is exactly what produced I-032. The cost of being wrong is one line that expires by itself in 2h.
 
