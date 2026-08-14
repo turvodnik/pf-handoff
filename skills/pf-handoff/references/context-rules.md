@@ -30,19 +30,26 @@ A state cheat-sheet from which any session can be resumed without loss (template
 Parallel sessions do not see each other's commands, and "I see no basis for this edit" is not proof it lacks one (§8). The claims file is the one place where current holdings are visible. It is NOT stored in the HANDOFF: step 3 of this skill rewrites the HANDOFF whole, so a claim parked there would be erased by contract — and a HANDOFF is per-task, while a claim is per-repository.
 
 - One file for the whole machine: `_tools/.agents/runtime/claims.md`, gitignored. Local-only on purpose — claiming never needs a push, so the claim mechanism itself cannot race.
-- Line format, separator ` · `, local time: `repo-or-path · ticket · who · взято YYYY-MM-DD HH:MM · истекает YYYY-MM-DD HH:MM`. The scope field may be a path inside the repo when sessions work on disjoint parts (two agents in different subtrees of `_tools` do not conflict).
+- Line format, separator ` · `, local time: `repo-or-path · ticket · who · взято YYYY-MM-DD HH:MM · истекает YYYY-MM-DD HH:MM`. The scope may be a path inside the repo when sessions work on disjoint parts (two agents in different subtrees of `_tools` do not conflict). **One path per line** — a composite scope (`a + b`) is forbidden: the check compares whole prefixes and would silently miss the second half (found by the §6 gate on the very first live claim, 14.08).
 - **Expiry is mandatory**, default 2h (one packet-session, §9). An expired line is free: the next claimer deletes it and writes its own. No cleanup daemon, no locks — a file a human reads by eye and fixes by hand.
-- Check before the first write (prints live overlapping claims, silence = free):
+- Check before the first write (prints live overlapping claims and anything it could not parse; silence = free):
 
 ```sh
-R=_tools; awk -F' · ' -v r="$R" -v now="$(date '+%Y-%m-%d %H:%M')" \
-  'NF>=5 {s=$1; sub(/^взято /,"",$4); sub(/^истекает /,"",$5); \
-   if ((index(s,r)==1 || index(r,s)==1) && $5 > now) print "ЗАНЯТО: " $0}' \
-  "$HOME/Проекты ai/_tools/.agents/runtime/claims.md"
+C="$TOOLS/.agents/runtime/claims.md"   # $TOOLS — корень мастерской (здесь: _tools)
+R="_tools/AGENTS.md"                   # что берёшь на запись
+[ -f "$C" ] || echo "файла заявок нет — свободно"
+[ -f "$C" ] && awk -F' · ' -v r="$R" -v now="$(date '+%Y-%m-%d %H:%M')" '
+  /^## Живые заявки/ {live=1; next}
+  !live || /^[[:space:]]*$/ {next}
+  NF<5 {print "ВНИМАНИЕ, строка не разобрана (проверь глазами): " $0; next}
+  { ex=$5; sub(/^истекает /,"",ex)
+    if ($1 ~ / \+ /) print "ВНИМАНИЕ, составная область, одна строка = один путь: " $0
+    else if ((index($1,r)==1 || index(r,$1)==1) && ex > now) print "ЗАНЯТО: " $0 }' "$C"
 ```
 
+- The check is **loud, not fail-open**: a malformed line is reported instead of being read as "free" — a mistyped separator must not look like an empty file.
 - Someone else's live line overlapping your scope — stop and ask the human; do not "just be careful". Your own work done — delete your line.
-- A single session working alone skips all of this: the cost has no payoff.
+- No "I am alone here" exemption: a session cannot know it is alone — that assumption is exactly what produced I-032. The cost of being wrong is one line that expires by itself in 2h.
 
 ## Window thresholds
 
