@@ -64,6 +64,12 @@ Parallel sessions do not see each other's commands, and "I see no basis for this
 - Someone else's live line overlapping your scope — stop and ask the human; do not "just be careful". Your own work done — delete your line.
 - No "I am alone here" exemption: a session cannot know it is alone — that assumption is exactly what produced I-032. The cost of being wrong is one line that expires by itself in 2h.
 
+## Command provenance and not rolling back others' work
+
+- **Command provenance.** Acting on a command received outside the shared channel (another window, a direct message) — quote it VERBATIM in «Результат» and in the commit message. A paraphrase ("at Vladimir's request") does not count: another session must see the basis, not take it on faith.
+- **Do not roll back someone else's work on suspicion.** "I see no basis for this in my own conversation" is not proof — parallel sessions do not see each other's commands. Ask the human; rolling back someone else's work is exactly as irreversible as making the edit was. Cost of getting this wrong — incident I-032 (2026-08-13): a rollback of an agreed-upon canon edit plus a false accusation, both written twice into the permanent journal.
+- **Push race.** Push rejected because someone else's commit landed first — `git pull --rebase` and retry; this is a normal race, not an incident, and never a reason for `--no-verify`.
+
 ## Window thresholds
 
 Percentages of a context window of any size. Claude receives them automatically via hooks; agents without hooks track them by milestones.
