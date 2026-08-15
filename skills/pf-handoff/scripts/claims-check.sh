@@ -61,8 +61,10 @@ fi
 
 exec python3 - "$SELF_REAL" "${1-}" <<'PYEOF'
 # -*- coding: utf-8 -*-
+import getpass
 import os
 import re
+import socket
 import sys
 import unicodedata
 from datetime import datetime
@@ -76,8 +78,52 @@ raw_scope = sys.argv[2] if len(sys.argv) > 2 else ""
 warn = []   # ВНИМАНИЕ — «не смог проверить»
 busy = []   # ЗАНЯТО
 
+# ---- событийный лог (T-040): каждая проверка дописывает одну строку в
+# версируемый журнал, ЧТОБЫ ЗАМЕР §8 стал возможен вообще — «живой» файл
+# заявок сам не версируется (`.agents/runtime/` в .gitignore), поэтому
+# история держаний в нём принципиально недоступна git-логу (находка Codex,
+# T-038/T-040). Лог кладём ВНЕ и `.agents/runtime/` (не версируется), и ВНЕ
+# `skill-library/skills/pf-handoff/` (эту папку целиком rsync копирует в
+# публичный дистрибутив turvodnik/pf-handoff, sync-from-tools.sh) — иначе
+# либо лог не версируется вообще, либо чужие приватные события утекают в
+# публичный репозиторий при каждом релизе. `<мастерская>/.agents/` версируется
+# (в .gitignore исключён только `.agents/runtime/`) и наружу не синкается —
+# ровно то место.
+now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+scope_forms_for_log = None   # заполняется, когда область успешно канонизирована
+
+
+def log_path_for(tools_root):
+    return os.path.join(tools_root, ".agents", "claims-events.log")
+
+
+def log_event(tools_root, verdict):
+    """Дозаписать одно событие. Ничего не решает за основную проверку:
+    падение дозаписи не должно менять ни вердикт, ни код выхода (задача
+    T-040, п.4) — только сказать о проблеме вслух, не молча и не падением."""
+    path_field = scope_forms_for_log if scope_forms_for_log else (raw_scope.strip() or "(путь не задан)")
+    who = os.environ.get("CLAIMS_ACTOR", "").strip()
+    if not who:
+        try:
+            who = "%s@%s" % (getpass.getuser(), socket.gethostname())
+        except Exception:
+            who = "неизвестно"
+    line = "%s · %s · %s · %s\n" % (now_str, path_field, verdict, who)
+    log_path = log_path_for(tools_root)
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError as exc:
+        sys.stderr.write(
+            "ПРЕДУПРЕЖДЕНИЕ, не удалось дописать событие в лог заявок %s (%s) — "
+            "вердикт проверки заявки это не меняет\n" % (log_path, exc)
+        )
+
 
 def finish():
+    verdict = "ЗАНЯТО" if busy else ("ВНИМАНИЕ" if warn else "СВОБОДНО")
+    log_event(tools, verdict)
     for line in warn:
         print(line)
     for line in busy:
@@ -218,6 +264,8 @@ except (OSError, ValueError) as exc:
                 "читай файл заявок глазами" % (raw_scope, exc))
     finish()
 
+scope_forms_for_log = " | ".join(scope_forms)
+
 if ambiguous:
     warn.append(ambiguous)
 
@@ -231,6 +279,7 @@ if not os.path.isfile(claims):
     if os.path.isdir(runtime_dir) and not os.path.islink(claims) and not overridden and workshop:
         if warn:
             finish()   # неоднозначная область важнее спокойного ответа
+        log_event(tools, "СВОБОДНО")
         print("держаний нет: файла заявок ещё не заводили (%s)" % claims)
         sys.exit(0)
     if not overridden and not workshop:

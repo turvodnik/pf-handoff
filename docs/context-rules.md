@@ -64,6 +64,45 @@ Parallel sessions do not see each other's commands, and "I see no basis for this
 - Someone else's live line overlapping your scope — stop and ask the human; do not "just be careful". Your own work done — delete your line.
 - No "I am alone here" exemption: a session cannot know it is alone — that assumption is exactly what produced I-032. The cost of being wrong is one line that expires by itself in 2h.
 
+### Event log (measuring §8 compliance)
+
+`claims.md` itself proves nothing over time: it lives under `.gitignore`
+(`.agents/runtime/`) so `git log` can never see a single line from it — a
+compliance count read from its history would be a guaranteed zero regardless
+of how many claims actually happened (T-038/T-040, "could not check" ≠
+"checked, clean"). To make the §8 measurement possible at all, every
+`claims-check.sh` run appends **one line per check** to a versioned event
+log, independent of the claim file's own gitignored lifecycle.
+
+- Path: `<workshop>/.agents/claims-events.log` — inside `.agents/` but
+  **outside** `.agents/runtime/` (that subtree stays gitignored) and
+  **outside** `skill-library/skills/pf-handoff/` (that whole directory is
+  `rsync --delete`d into the public `turvodnik/pf-handoff` distribution by
+  `sync-from-tools.sh`; a log placed inside it would leak private events on
+  every release, or force the log itself out of version control). `.agents/`
+  is tracked by git (only its `runtime/` child is ignored) and is never
+  synced out — the one place satisfying both constraints.
+- One line per event, format `YYYY-MM-DD HH:MM · <scope, canonicalized> · <ВЕРДИКТ> · <who>` —
+  timestamp, the checked scope after canonicalization (all its resolved
+  forms, joined with ` | ` when the scope was ambiguous), the verdict
+  (`СВОБОДНО`/`ЗАНЯТО`/`ВНИМАНИЕ`, matching the check's own exit code), and
+  who ran it (`$CLAIMS_ACTOR` env var if set, else `user@host`). No secret
+  values ever appear here — only a path and a verdict (§5).
+- The append happens on **every** exit path of `claims-check.sh`, including
+  the calm "держаний нет" case, so the log's event count matches the number
+  of times the protocol was actually consulted, not just the number of
+  overlaps found.
+- The append is best-effort and never allowed to change the check's own
+  verdict or exit code: a missing/unwritable log directory prints a loud
+  `ПРЕДУПРЕЖДЕНИЕ` to stderr and the claim check still returns its correct
+  `ЗАНЯТО`/`СВОБОДНО`/`ВНИМАНИЕ` — the class of bug this whole protocol
+  exists to prevent is a check that goes silent or crashes instead of
+  saying "I could not do X" out loud, and logging must not become a new
+  instance of it.
+- `optimize/scripts/hygiene-sweep.sh` check 6 reads this log (when present)
+  to report a real count of claim-check events over the period; absent the
+  log it still gives the same honest "cannot count" phrase as before.
+
 ## Session start/finish ritual, L-task execution, model by role, drift watchdog
 
 - **Start.** Read the project's AGENTS.md → the decision journal `.agents/journal/` for the last 3 days → task packets with status ≠ done → the active HANDOFF (this file's rules), if any → check the list of available skills and use the fitting one (do not invent a process a skill already describes).
