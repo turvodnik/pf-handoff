@@ -122,7 +122,7 @@ bash hooks/doctor.sh                 # also validates the config and says WHY it
 
 The development canon currently lives in the owner's private `_tools` (skill-library + context-hooks); this repository is the distribution. Before a release: `bash sync-from-tools.sh` → `git diff` → update `CHANGELOG.md` (both languages) → commit → tag `vX.Y.Z`. Versioning is semver: breaking changes (HANDOFF format, state file names, skill contracts) = major.
 
-Run the test suite locally with `bash tests/run.sh` (bash 3.2+, coreutils, `jq` and `python3` — the hooks-never-crash matrix builds curated jq-only/python3-only PATH sandboxes and aborts without either, not a graceful skip. ShellCheck and PyYAML are the only genuinely optional pieces, skipped with a reason when absent). The same command runs in CI on every push and pull request ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)).
+Run the test suite locally with `bash tests/run.sh` (bash 3.2+, coreutils, `jq` and `python3` — the hooks-never-crash matrix builds curated jq-only/python3-only PATH sandboxes and aborts without either, not a graceful skip. ShellCheck, PyYAML, and actionlint are the only genuinely optional pieces, skipped with a reason when absent). The same command runs in CI on every push and pull request ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)).
 
 **pf-handoff is fully standalone** — it needs no task tracker, ticket system, or any other tooling. The rules mention a decision journal and task packets; if you don't use those, the corresponding steps simply don't apply (see the note at the top of `docs/rules-section.md`).
 

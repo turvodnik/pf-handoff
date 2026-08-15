@@ -99,11 +99,21 @@ TMP_OUT="$(mktemp "${SETTINGS_PATH}.XXXXXX")"
 # nothing. Idempotency is unchanged: the replacement is byte-identical on the
 # second run.
 JQ_FILTER='
+# Preserve a manually-raised timeout across reinstalls: if OUR entry already
+# exists (matched by marker), reuse its current timeout instead of always
+# writing 10. Only a brand-new registration gets the 10 default. Without this,
+# every `git pull && bash install.sh` silently rolled back a timeout someone
+# had increased by hand (e.g. because their machine needs longer than 10s to
+# write the PreCompact snapshot) — a silent revert of a manual setting.
 def upsert(evt; marker; entry):
-  .hooks[evt] = ((.hooks[evt] // []) as $arr
+  ((.hooks[evt] // []) as $arr
+   | ([$arr[]? | (.hooks // [])[] | select((.command? // "") | contains(marker)) | .timeout] | first) // 10
+  ) as $timeout
+  | (entry | .hooks[0].timeout = $timeout) as $final
+  | .hooks[evt] = ((.hooks[evt] // []) as $arr
     | if ($arr | any(.hooks[]?.command? // "" | contains(marker)))
-      then ($arr | map(if ((.hooks // []) | any(.command? // "" | contains(marker))) then entry else . end))
-      else $arr + [entry]
+      then ($arr | map(if ((.hooks // []) | any(.command? // "" | contains(marker))) then $final else . end))
+      else $arr + [$final]
       end);
 
 .statusLine = {"type":"command","command":$sl_cmd}
@@ -130,6 +140,19 @@ path, sl_cmd, cg_cmd, ss_cmd, pc_cmd = sys.argv[1:6]
 with open(path, encoding="utf-8") as fh:
     d = json.load(fh)
 
+def existing_timeout(d, evt, marker, default=10):
+    """Timeout of OUR entry for this event, if one is already installed.
+
+    Mirrors the jq twin: reinstalling must not roll back a timeout someone
+    raised by hand (e.g. because their machine needs longer than 10s to write
+    the PreCompact snapshot) back down to the 10 default.
+    """
+    for item in d.get("hooks", {}).get(evt, []):
+        for h in item.get("hooks", []):
+            if marker in (h.get("command") or "") and "timeout" in h:
+                return h["timeout"]
+    return default
+
 def upsert(d, evt, marker, entry):
     """Replace OUR entry with the current form; never touch a foreign one.
 
@@ -153,13 +176,17 @@ def upsert(d, evt, marker, entry):
 # qualified marker broke idempotency and doctor for external users.
 d["statusLine"] = {"type": "command", "command": sl_cmd}
 upsert(d, "UserPromptSubmit", "/context-guard.sh",
-    {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd, "timeout": 10}]})
+    {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd,
+     "timeout": existing_timeout(d, "UserPromptSubmit", "/context-guard.sh")}]})
 upsert(d, "PostToolUse", "/context-guard.sh",
-    {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd, "timeout": 10}]})
+    {"matcher": "*", "hooks": [{"type": "command", "command": cg_cmd,
+     "timeout": existing_timeout(d, "PostToolUse", "/context-guard.sh")}]})
 upsert(d, "SessionStart", "/sessionstart.sh",
-    {"hooks": [{"type": "command", "command": ss_cmd, "timeout": 10}]})
+    {"hooks": [{"type": "command", "command": ss_cmd,
+     "timeout": existing_timeout(d, "SessionStart", "/sessionstart.sh")}]})
 upsert(d, "PreCompact", "/precompact.sh",
-    {"hooks": [{"type": "command", "command": pc_cmd, "timeout": 10}]})
+    {"hooks": [{"type": "command", "command": pc_cmd,
+     "timeout": existing_timeout(d, "PreCompact", "/precompact.sh")}]})
 
 print(json.dumps(d, indent=2, ensure_ascii=False))
 PYEOF
