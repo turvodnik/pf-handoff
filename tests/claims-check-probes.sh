@@ -26,6 +26,15 @@ WORK="$(mktemp -d)"
 trap 'chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 PROJ="$WORK/projects"
 TOOLS="$PROJ/_tools"
+# Экспортируем один раз здесь: пробы ниже запускают "$SCRIPT" как ДОЧЕРНИЙ
+# процесс и полагаются на то, что его $TOOLS совпадает со значением,
+# подставленным в АРГУМЕНТЫ той же команды. Присваивание вида
+# `bash … "$TOOLS/…"` этого НЕ гарантирует (SC2097/2098):
+# `"$TOOLS"` в аргументах раскрывает родитель ДО форка, а само присваивание
+# видно только форкнутому процессу — в окружении без унаследованного TOOLS
+# это разошлось бы молча. Экспорт делает значение видимым потомку без
+# зависимости от одноимённого присваивания на той же строке.
+export TOOLS
 CLAIMS="$TOOLS/.agents/runtime/claims.md"
 
 # T-040 фикс-круг 1, P2: событийный лог не должен попадать в БОЕВОЙ
@@ -68,7 +77,7 @@ claims() {
 check() {
     local name="$1" want="$2" scope="$3"
     local out rc state
-    out="$(TOOLS="$TOOLS" bash "$SCRIPT" "$scope" 2>&1)"; rc=$?
+    out="$(bash "$SCRIPT" "$scope" 2>&1)"; rc=$?
     case "$rc" in
         0) state="СВОБОДНО" ;;
         1) state="ЗАНЯТО" ;;
@@ -92,7 +101,7 @@ check() {
 checkc() {
     local name="$1" want="$2" dir="$3" scope="$4" also="${5-}"
     local out rc state
-    out="$(cd "$dir" && TOOLS="$TOOLS" bash "$SCRIPT" "$scope" 2>&1)"; rc=$?
+    out="$(cd "$dir" && bash "$SCRIPT" "$scope" 2>&1)"; rc=$?
     case "$rc" in
         0) state="СВОБОДНО" ;;
         1) state="ЗАНЯТО" ;;
@@ -144,8 +153,7 @@ check "хвостовой слэш в ОБЛАСТИ"           ЗАНЯТО "$T
 # ~ в заявке: HOME подменяем на папку проектов фикстуры
 # shellcheck disable=SC2088  # `~` тут НЕ должен раскрываться: это форма записи внутри строки заявки, её разворачивает сам скрипт
 claims "~/_tools/AGENTS.md · T-000 · другая сессия · взято 2026-01-01 00:00 · истекает $FUTURE"
-# shellcheck disable=SC2097,SC2098  # ложное срабатывание: справа стоит ВНЕШНЯЯ переменная, значение то же — так и задумано
-out="$(HOME="$PROJ" TOOLS="$TOOLS" bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
+out="$(HOME="$PROJ" bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
 if [ $rc -eq 1 ]; then pass=$((pass+1)); printf '  ✅ %-52s → ЗАНЯТО\n' "~ в заявке (было ВНИМАНИЕ в круге 3)"
 else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "~ в заявке" "$rc" "$(printf '%s' "$out" | head -1)"; fi
 
@@ -244,16 +252,14 @@ chmod 644 "$CLAIMS"
 echo
 echo "-- смешанное состояние и пустой ввод --"
 claims "битая строка" "_tools/AGENTS.md · T-000 · кто · взято 2026-01-01 00:00 · истекает $FUTURE"
-# shellcheck disable=SC2097,SC2098  # ложное срабатывание: справа стоит ВНЕШНЯЯ переменная, значение то же — так и задумано
-out="$(TOOLS="$TOOLS" bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
+out="$(bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
 if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q "ЗАНЯТО" && printf '%s' "$out" | grep -q "ВНИМАНИЕ"; then
     pass=$((pass+1)); printf '  ✅ %-52s → ЗАНЯТО (rc=1) + ВНИМАНИЕ напечатано\n' "живая заявка + мусорная строка"
 else
     fail=$((fail+1)); printf '  ❌ %-52s → rc=%s, вывод: %s\n' "живая заявка + мусорная строка" "$rc" "$out"
 fi
 check "область из одних пробелов"          ВНИМАНИЕ "   "
-# shellcheck disable=SC2097,SC2098  # ложное срабатывание: справа стоит ВНЕШНЯЯ переменная, значение то же — так и задумано
-out="$(TOOLS="$TOOLS" bash "$SCRIPT" 2>&1)"; rc=$?
+out="$(bash "$SCRIPT" 2>&1)"; rc=$?
 if [ $rc -eq 2 ]; then pass=$((pass+1)); printf '  ✅ %-52s → ВНИМАНИЕ (rc=2)\n' "область не задана вовсе"
 else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s\n' "область не задана вовсе" "$rc"; fi
 
@@ -283,13 +289,19 @@ else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "файла нет +
 out="$(CLAIMS_FILE="$TOOLS/нет-такого-файла.md" bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
 if [ $rc -eq 2 ]; then pass=$((pass+1)); printf '  ✅ %-52s → ВНИМАНИЕ (rc=2)\n' "CLAIMS_FILE перекрыт и указывает мимо"
 else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "CLAIMS_FILE перекрыт и указывает мимо" "$rc" "$(printf '%s' "$out" | head -1)"; fi
-# shellcheck disable=SC2097,SC2098  # ложное срабатывание: справа стоит ВНЕШНЯЯ переменная, значение то же — так и задумано
-out="$(TOOLS="$WORK/нет-такого" bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
+# Здесь TOOLS у ребёнка НАМЕРЕННО расходится со значением в аргументе
+# ($TOOLS, унаследованный из export выше, — реальный путь фикстуры):
+# проверяем, что скрипт замечает битый TOOLS, даже когда аргумент
+# указывает на существующий файл. Отдельное имя (BOGUS_TOOLS) вместо
+# переприсваивания TOOLS в той же команде — чтобы это расхождение было
+# видно по имени переменной, а не пряталось за совпадением имён.
+BOGUS_TOOLS="$WORK/нет-такого"
+REAL_AGENTS_MD="$TOOLS/AGENTS.md"
+out="$(TOOLS="$BOGUS_TOOLS" bash "$SCRIPT" "$REAL_AGENTS_MD" 2>&1)"; rc=$?
 if [ $rc -eq 2 ]; then pass=$((pass+1)); printf '  ✅ %-52s → ВНИМАНИЕ (rc=2)\n' "TOOLS мимо (каталога нет)"
 else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "TOOLS мимо" "$rc" "$out"; fi
 ln -s "$WORK/в-никуда" "$CLAIMS"
-# shellcheck disable=SC2097,SC2098  # ложное срабатывание: справа стоит ВНЕШНЯЯ переменная, значение то же — так и задумано
-out="$(TOOLS="$TOOLS" bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
+out="$(bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
 if [ $rc -eq 2 ]; then pass=$((pass+1)); printf '  ✅ %-52s → ВНИМАНИЕ (rc=2)\n' "битый симлинк на файл заявок"
 else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "битый симлинк на файл заявок" "$rc" "$out"; fi
 rm -f "$CLAIMS"
@@ -338,7 +350,7 @@ echo "-- событийный лог (T-040, фикс-круги 1-2) --"
 # на договоре.
 rm -f "$CLAIMS_LOG"
 claims "_tools/лог-проба · T-000 · кто · взято 2026-01-01 00:00 · истекает $FUTURE"
-out="$(TOOLS="$TOOLS" bash "$SCRIPT" "$TOOLS/лог-проба" 2>&1)"; rc=$?
+out="$(bash "$SCRIPT" "$TOOLS/лог-проба" 2>&1)"; rc=$?
 if [ $rc -eq 1 ] && [ -f "$CLAIMS_LOG" ] && [ "$(wc -l < "$CLAIMS_LOG" | tr -d ' ')" = 1 ]; then
     pass=$((pass+1)); printf '  ✅ %-52s → CLAIMS_LOG перекрывает путь, 1 строка\n' "лог: CLAIMS_LOG обязателен для теста"
 else
@@ -349,7 +361,7 @@ fi
 # строки — одно событие обязано остаться ОДНОЙ строкой лога, иначе свип
 # считает одно взятие заявки за два и больше события.
 rm -f "$CLAIMS_LOG"
-out="$(TOOLS="$TOOLS" CLAIMS_ACTOR=$'сессия\nвторая-строка' bash "$SCRIPT" "$TOOLS/лог-проба"$'\n'"-перенос" 2>&1)"; rc=$?
+out="$(CLAIMS_ACTOR=$'сессия\nвторая-строка' bash "$SCRIPT" "$TOOLS/лог-проба"$'\n'"-перенос" 2>&1)"; rc=$?
 after_lines=$(wc -l < "$CLAIMS_LOG" 2>/dev/null | tr -d ' ')
 if [ "${after_lines:-0}" = 1 ] && ! grep -qP '\r' "$CLAIMS_LOG" 2>/dev/null; then
     pass=$((pass+1)); printf '  ✅ %-52s → 1 строка на событие, перенос не пролез\n' "лог: перевод строки в области/CLAIMS_ACTOR"
