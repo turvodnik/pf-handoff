@@ -84,10 +84,16 @@ log, independent of the claim file's own gitignored lifecycle.
   synced out — the one place satisfying both constraints.
 - One line per event, format `YYYY-MM-DD HH:MM · <scope, canonicalized> · <ВЕРДИКТ> · <who>` —
   timestamp, the checked scope after canonicalization (all its resolved
-  forms, joined with ` | ` when the scope was ambiguous), the verdict
+  forms, joined with ` | ` when the scope was ambiguous, newlines/CR folded
+  to spaces so one event can never become two lines), the verdict
   (`СВОБОДНО`/`ЗАНЯТО`/`ВНИМАНИЕ`, matching the check's own exit code), and
-  who ran it (`$CLAIMS_ACTOR` env var if set, else `user@host`). No secret
-  values ever appear here — only a path and a verdict (§5).
+  who ran it (`$CLAIMS_ACTOR` env var if set, sanitized the same way; else
+  `user@host:pid`). No secret values ever appear here — only a path and a
+  verdict (§5). **Known limit, named out loud, not hidden**: without
+  `CLAIMS_ACTOR` the fallback distinguishes concurrent *processes* (the PID)
+  but not repeated calls from the *same* session over time — full
+  session-level attribution needs an agent that sets `CLAIMS_ACTOR` itself
+  (e.g. `claude:T-040`); the log does not claim more precision than that.
 - The append happens on **every** exit path of `claims-check.sh`, including
   the calm "держаний нет" case, so the log's event count matches the number
   of times the protocol was actually consulted, not just the number of
@@ -98,10 +104,48 @@ log, independent of the claim file's own gitignored lifecycle.
   `ЗАНЯТО`/`СВОБОДНО`/`ВНИМАНИЕ` — the class of bug this whole protocol
   exists to prevent is a check that goes silent or crashes instead of
   saying "I could not do X" out loud, and logging must not become a new
-  instance of it.
+  instance of it. The directory under the log is only ever *created* when
+  the root already looks like a real workshop (or the directory exists
+  already) — a wrong/overridden `TOOLS` never spawns a stray `.agents/`
+  in an unrelated place; it just prints the same warning and skips.
 - `optimize/scripts/hygiene-sweep.sh` check 6 reads this log (when present)
   to report a real count of claim-check events over the period; absent the
   log it still gives the same honest "cannot count" phrase as before.
+
+**Does writing this log itself violate the write-claim protocol it measures?
+(fix-round 1, Codex P1)** No — by a named exemption, not a workaround.
+`claims.md` is never claimed before it is edited either: requiring a claim
+on the claim file to write the claim file is the exact recursion this
+question describes, and the protocol has never asked for it. The reason is
+structural, not accidental: `claims.md` is *protocol infrastructure*, not
+content a session can semantically collide with another session over — two
+sessions touching the *same file* still touch *different, non-overlapping
+lines*, so §8 has always carved this class out in practice (the decision
+journal §10 works the same way: many sessions append to one day's journal
+file without claiming it, because appends do not conflict in meaning).
+`claims-events.log` is the same class of file as `claims.md` — its
+companion, not a new kind of thing — and inherits the same exemption:
+- Every write is one `open(path, "a")` + one `write()` call of a single
+  short line; POSIX guarantees that write is atomic (below `PIPE_BUF`), so
+  concurrent processes interleave whole *lines*, never bytes within a line
+  — the append cannot corrupt another session's event, only reorder events
+  relative to each other, which does not affect a count.
+- A dirty working tree between commits is the **expected** state of this
+  file, exactly as it already is for a journal file mid-session — not a
+  sign that something broke. Whoever commits their own ticket's work
+  commits the log lines that accumulated alongside it, the same way §10
+  already expects the day's journal entry to ride along with a commit.
+- What *is* a genuine bug class, and is closed here: a test/probe run
+  polluting the **real** log with fixture noise. `claims-check-probes.sh`
+  sets `CLAIMS_LOG` for its entire run (see below) so a test event can
+  never physically land in the tracked file regardless of what `TOOLS` the
+  probe under test is exercising — the isolation does not depend on every
+  individual probe getting `TOOLS` "right".
+- `CLAIMS_LOG` (env var, mirrors `CLAIMS_FILE`) overrides the log path
+  unconditionally, for exactly this reason: sandboxed tests point it at a
+  disposable file, so from the point this variable exists, every line that
+  ever lands in the real `.agents/claims-events.log` is a real event by
+  construction, not by convention someone has to remember.
 
 ## Session start/finish ritual, L-task execution, model by role, drift watchdog
 

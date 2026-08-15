@@ -28,6 +28,16 @@ PROJ="$WORK/projects"
 TOOLS="$PROJ/_tools"
 CLAIMS="$TOOLS/.agents/runtime/claims.md"
 
+# T-040 фикс-круг 1, P2: событийный лог не должен попадать в БОЕВОЙ
+# claims-events.log ни при каких обстоятельствах, включая пробы, где TOOLS
+# намеренно неверен/не задан (`env -u TOOLS`) — там вычисление корня само
+# по себе часть проверяемого поведения, и полагаться на него для изоляции
+# нельзя. CLAIMS_LOG экспортируется на ВЕСЬ процесс батареи и перекрывает
+# вычисление пути лога безусловно (см. `log_path_for()` в claims-check.sh) —
+# так утечка тестового события в боевой журнал структурно исключена, а не
+# «обычно не происходит».
+export CLAIMS_LOG="$WORK/проб-events.log"
+
 pass=0; fail=0
 
 # I-037: перед КАЖДОЙ записью убеждаемся, что цель не симлинк — иначе тест
@@ -318,6 +328,47 @@ claims "_tools/AGENTS.md · T-000 · другая сессия · взято 202
 out="$(env -u TOOLS -u CLAIMS_FILE bash "$INNER" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
 if [ $rc -eq 1 ]; then pass=$((pass+1)); printf '  ✅ %-52s → ЗАНЯТО\n' "TOOLS не задан, корень вычислен верно"
 else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "TOOLS не задан, корень вычислен верно" "$rc" "$out"; fi
+
+echo
+echo "-- событийный лог (T-040, фикс-круг 1: P1/P2/P3) --"
+
+# P2/изоляция: CLAIMS_LOG (уже экспортирован на всю батарею) обязан
+# перекрывать вычисление пути лога БЕЗУСЛОВНО, даже когда TOOLS корректен, —
+# иначе изоляция песочницы от боевого журнала держится на совпадении, а не
+# на договоре.
+rm -f "$CLAIMS_LOG"
+claims "_tools/лог-проба · T-000 · кто · взято 2026-01-01 00:00 · истекает $FUTURE"
+out="$(TOOLS="$TOOLS" bash "$SCRIPT" "$TOOLS/лог-проба" 2>&1)"; rc=$?
+if [ $rc -eq 1 ] && [ -f "$CLAIMS_LOG" ] && [ "$(wc -l < "$CLAIMS_LOG" | tr -d ' ')" = 1 ]; then
+    pass=$((pass+1)); printf '  ✅ %-52s → CLAIMS_LOG перекрывает путь, 1 строка\n' "лог: CLAIMS_LOG обязателен для теста"
+else
+    fail=$((fail+1)); printf '  ❌ %-52s → rc=%s, файл=%s\n' "лог: CLAIMS_LOG" "$rc" "$([ -f "$CLAIMS_LOG" ] && echo да || echo нет)"
+fi
+
+# P3 (💭, разрыв строки): область и CLAIMS_ACTOR с буквальным переводом
+# строки — одно событие обязано остаться ОДНОЙ строкой лога, иначе свип
+# считает одно взятие заявки за два и больше события.
+rm -f "$CLAIMS_LOG"
+out="$(TOOLS="$TOOLS" CLAIMS_ACTOR=$'сессия\nвторая-строка' bash "$SCRIPT" "$TOOLS/лог-проба"$'\n'"-перенос" 2>&1)"; rc=$?
+after_lines=$(wc -l < "$CLAIMS_LOG" 2>/dev/null | tr -d ' ')
+if [ "${after_lines:-0}" = 1 ] && ! grep -qP '\r' "$CLAIMS_LOG" 2>/dev/null; then
+    pass=$((pass+1)); printf '  ✅ %-52s → 1 строка на событие, перенос не пролез\n' "лог: перевод строки в области/CLAIMS_ACTOR"
+else
+    fail=$((fail+1)); printf '  ❌ %-52s → строк в логе: %s (ожидалась 1)\n' "лог: перевод строки" "${after_lines:-0}"
+    printf '     содержимое: %s\n' "$(cat "$CLAIMS_LOG" 2>/dev/null)"
+fi
+
+# P1, часть 2: корень НЕ похож на мастерскую (нет skill-library/) и
+# .agents/ там ещё не существует — claims-check.sh не имеет права создать
+# новый каталог .agents/ в произвольном/неверном месте только ради лога.
+BOGUS="$WORK/левый-корень"
+mk "$BOGUS"
+out="$(env -u CLAIMS_LOG TOOLS="$BOGUS" bash "$SCRIPT" "$BOGUS/AGENTS.md" 2>&1)"; rc=$?
+if [ $rc -eq 2 ] && [ ! -e "$BOGUS/.agents" ]; then
+    pass=$((pass+1)); printf '  ✅ %-52s → ВНИМАНИЕ, .agents/ не создан\n' "лог: не создаёт каталог в непроверенном корне"
+else
+    fail=$((fail+1)); printf '  ❌ %-52s → rc=%s, .agents/ существует=%s\n' "лог: не создаёт каталог" "$rc" "$([ -e "$BOGUS/.agents" ] && echo да || echo нет)"
+fi
 
 echo
 echo "итого: успешно $pass, провалено $fail"
