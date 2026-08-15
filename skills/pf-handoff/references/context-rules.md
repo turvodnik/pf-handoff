@@ -58,6 +58,14 @@ Parallel sessions do not see each other's commands, and "I see no basis for this
 - Someone else's live line overlapping your scope — stop and ask the human; do not "just be careful". Your own work done — delete your line.
 - No "I am alone here" exemption: a session cannot know it is alone — that assumption is exactly what produced I-032. The cost of being wrong is one line that expires by itself in 2h.
 
+## Session start/finish ritual, L-task execution, model by role, drift watchdog
+
+- **Start.** Read the project's AGENTS.md → the decision journal `.agents/journal/` for the last 3 days → task packets with status ≠ done → the active HANDOFF (this file's rules), if any → check the list of available skills and use the fitting one (do not invent a process a skill already describes).
+- **Finish** (or a significant milestone): a journal entry (decision journal rules) + refresh the status of your own task packets + a `pf-handoff` checkpoint/close.
+- **Executing part of an L-task** — in a fresh session under `pf-do`: context is the packet + AGENTS.md only, not the tail of someone else's chat (cheaper on limits and more accurate).
+- **Model by role.** Thinking/designing/reviewing — the senior model; executing a ready plan — Sonnet-class.
+- **Drift watchdog runs BY ITSELF, no need to remember it** (T-028): at session start — cheap levels 2-3 (the `drift-guard.sh --mode session` hook, +0.3s), the expensive level 1 — a pre-push hook on the `_tools` canon. Silence = checked and clean; if it could not run, it says so loudly. That both routes are in place is checked by `doctor-agents.sh`.
+
 ## Command provenance and not rolling back others' work
 
 - **Command provenance.** Acting on a command received outside the shared channel (another window, a direct message) — quote it VERBATIM in «Результат» and in the commit message. A paraphrase ("at Vladimir's request") does not count: another session must see the basis, not take it on faith.
