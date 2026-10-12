@@ -1,0 +1,10 @@
+{
+  "name": "pf-handoff",
+  "version": "2.0.0",
+  "description": "Context budget and session continuity for Claude Code: HANDOFF checkpoints, resume, statusline.",
+  "author": {
+    "name": "Pifagor Studio"
+  },
+  "license": "MIT",
+  "keywords": ["context-budget", "session-continuity", "handoff", "statusline"]
+}

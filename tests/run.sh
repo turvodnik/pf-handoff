@@ -157,6 +157,17 @@ else
 fi
 
 # ===========================================================================
+group "guard-cases.sh (T-111/T-031): budget_tokens, advisor spike, autocheckpoint"
+# ===========================================================================
+gc_out=$("$BASH_BIN" "$TESTS_DIR/guard-cases.sh" 2>&1); gc_rc=$?
+echo "$gc_out" | tail -4
+if [ "$gc_rc" = 0 ] && printf '%s' "$gc_out" | grep -q '^RESULT: GREEN$'; then
+  pass "guard-cases.sh: RESULT GREEN"
+else
+  fail "guard-cases.sh: not green (rc=$gc_rc)" "$(printf '%s' "$gc_out" | grep '^FAIL' | head -5)"
+fi
+
+# ===========================================================================
 group "claims-check-probes.sh (T-030): write-claim matching, hostile battery"
 # ===========================================================================
 cc_probes="$TESTS_DIR/claims-check-probes.sh"
@@ -259,23 +270,28 @@ for variant_name in jq-only python3-only neither; do
 done
 
 # ===========================================================================
-group "precompact.sh gate: blocks loudly without a snapshot, stays out of the way with one"
+group "precompact.sh gate: blocks loudly without a snapshot, stays out of the way with one, ignores foreign input"
 # ===========================================================================
-# The contract this group pins down (decided in T-033, documented in
-# docs/context-rules.md "Automatic snapshot and the gate before compaction"):
+# The contract this group pins down (decided in T-033, narrowed in T-166,
+# documented in docs/context-rules.md "Automatic snapshot and the gate before
+# compaction"):
 #
-#   * snapshot written        -> rc=0, silent, compaction proceeds;
-#   * snapshot NOT written    -> rc=2 AND a human-readable reason on stderr.
-#     Silence would be the failure this gate exists to prevent: compacting
-#     while nothing was preserved, and looking exactly like success.
+#   * snapshot written                    -> rc=0, silent, compaction proceeds;
+#   * Claude payload (raw text contains a "session_id" key) but the snapshot
+#     could NOT be written                -> rc=2 AND a human-readable reason
+#     on stderr. Silence would be the failure this gate exists to prevent:
+#     compacting while nothing was preserved, and looking exactly like success;
+#   * unrecognised or foreign input (garbage, another platform's payload such
+#     as camelCase `sessionId`; no "session_id" key in the raw text)
+#                                         -> rc=0 and complete silence: the
+#     gate is not ours to apply there, so it neither blocks nor logs (T-166).
 #
-# Unparseable stdin lands in the second case on purpose. Without a JSON
-# reader (or with a payload that isn't JSON) there is no session id, so
-# there is nothing to name a snapshot file after — "could not check" is not
-# "checked, clean", so it blocks. That is also why the `neither` PATH
-# variant below blocks even on a perfectly valid payload: jq or python3 is
-# effectively a requirement of the gate, and this test states it out loud
-# rather than leaving it to be discovered on a bare machine.
+# Recognition is done on the RAW text, not on the parsed value. That is why
+# the `neither` PATH variant below still blocks a perfectly valid Claude
+# payload: jq or python3 is effectively a requirement of the gate for Claude
+# input, and this test states it out loud rather than leaving it to be
+# discovered on a bare machine. Garbage in that same variant is simply not
+# the gate's business and passes through silently.
 BLOCK_MARK="COMPACTION STOPPED"
 GOOD_PAYLOAD='{"session_id":"t033-gate","trigger":"manual","cwd":"","transcript_path":""}'
 
@@ -286,25 +302,45 @@ for variant_name in jq-only python3-only neither; do
     neither) mp="$MP_NONE" ;;
   esac
 
-  # --- garbage stdin: no session id -> no snapshot -> blocked, loudly ------
+  # --- garbage stdin: not a Claude payload -> not ours to gate -> rc=0, silent
   home_ok="$(mktempdir)"
   out=$(printf 'garbage \x00 not json { [' | PATH="$mp" HOME="$home_ok" "$mp/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
   rc=$?
-  case "$out" in *"$BLOCK_MARK"*) loud=1 ;; *) loud=0 ;; esac
-  if [ "$rc" = 2 ] && [ "$loud" = 1 ]; then
-    pass "precompact.sh ($variant_name, garbage stdin, HOME set) -> rc=2 + reason on stderr"
+  if [ "$rc" = 0 ] && [ -z "$out" ]; then
+    pass "precompact.sh ($variant_name, garbage stdin, HOME set) -> rc=0, silent (foreign input is not gated)"
   else
-    fail "precompact.sh ($variant_name, garbage stdin, HOME set) -> rc=$rc, loud=$loud" "$out"
+    fail "precompact.sh ($variant_name, garbage stdin, HOME set) -> rc=$rc, output not empty or rc != 0" "$out"
   fi
 
   home_nohome="$(mktempdir)"
   out=$(printf 'more garbage' | env -u HOME PATH="$mp" TMPDIR="$home_nohome" "$mp/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
   rc=$?
+  if [ "$rc" = 0 ] && [ -z "$out" ]; then
+    pass "precompact.sh ($variant_name, garbage stdin, env -u HOME) -> rc=0, silent (foreign input is not gated)"
+  else
+    fail "precompact.sh ($variant_name, garbage stdin, env -u HOME) -> rc=$rc, output not empty or rc != 0" "$out"
+  fi
+
+  # --- foreign platform payload (camelCase sessionId): also silent rc=0 ----
+  out=$(printf '{"sessionId":"x-foreign","hook_event_name":"PreCompact"}' | PATH="$mp" HOME="$(mktempdir)" "$mp/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
+  rc=$?
+  if [ "$rc" = 0 ] && [ -z "$out" ]; then
+    pass "precompact.sh ($variant_name, foreign camelCase sessionId payload) -> rc=0, silent"
+  else
+    fail "precompact.sh ($variant_name, foreign payload) -> rc=$rc, output not empty or rc != 0" "$out"
+  fi
+
+  # --- positive control: Claude-shaped but unparseable payload still blocks --
+  # "session_id" is present in the raw text, so the gate recognises it as
+  # Claude's; the JSON is broken, so no session id (and no snapshot) results.
+  # Must stay rc=2 + reason: this is what keeps the flip above honest.
+  out=$(printf '{"session_id": "trunc' | PATH="$mp" HOME="$(mktempdir)" "$mp/bash" "$HOOKS_DIR/precompact.sh" 2>&1)
+  rc=$?
   case "$out" in *"$BLOCK_MARK"*) loud=1 ;; *) loud=0 ;; esac
   if [ "$rc" = 2 ] && [ "$loud" = 1 ]; then
-    pass "precompact.sh ($variant_name, garbage stdin, env -u HOME) -> rc=2 + reason on stderr"
+    pass "precompact.sh ($variant_name, Claude-shaped unparseable payload) -> rc=2 + reason on stderr"
   else
-    fail "precompact.sh ($variant_name, garbage stdin, env -u HOME) -> rc=$rc, loud=$loud" "$out"
+    fail "precompact.sh ($variant_name, Claude-shaped unparseable payload) -> rc=$rc, loud=$loud" "$out"
   fi
 
   # --- valid payload, writable HOME ---------------------------------------
@@ -405,6 +441,37 @@ if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'probe.md'; then
   pass "sessionstart.sh (HOME set, live HANDOFF) -> the cheat-sheet is reported"
 else
   fail "sessionstart.sh (HOME set) -> rc=$rc, no HANDOFF in output" "$out"
+fi
+
+# ===========================================================================
+group "sessionstart.sh warns when cwd is not a project (Р14/I-077)"
+# ===========================================================================
+# A session started from a stray or empty folder used to work in total
+# silence: no AGENTS.md, no .agents/ -> nothing tells the agent that
+# checkpoints and claims are about to land in the global ~/.claude folders
+# instead of the project. Inside a live Claude Code session CLAUDE_PROJECT_DIR
+# is set and the payload's cwd is ignored, so every probe here must run with
+# `env -u CLAUDE_PROJECT_DIR` — same pattern the HOME probes above use for HOME.
+ss_warn_home="$(mktempdir)"
+ss_bare="$(mktempdir)"
+ss_bare_payload="$(printf '{"source":"startup","cwd":"%s","session_id":"t132-ss"}' "$ss_bare")"
+out=$(printf '%s' "$ss_bare_payload" | env -u CLAUDE_PROJECT_DIR HOME="$ss_warn_home" "$BASH_BIN" "$HOOKS_DIR/sessionstart.sh" 2>&1)
+rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'cwd не проект'; then
+  pass "sessionstart.sh (empty cwd, no AGENTS.md/.agents) -> warns 'cwd не проект'"
+else
+  fail "sessionstart.sh (empty cwd) -> rc=$rc, no warning in output" "$out"
+fi
+
+ss_named="$(mktempdir)"
+: > "$ss_named/AGENTS.md"
+ss_named_payload="$(printf '{"source":"startup","cwd":"%s","session_id":"t132-ss2"}' "$ss_named")"
+out=$(printf '%s' "$ss_named_payload" | env -u CLAUDE_PROJECT_DIR HOME="$ss_warn_home" "$BASH_BIN" "$HOOKS_DIR/sessionstart.sh" 2>&1)
+rc=$?
+if [ "$rc" = 0 ] && ! printf '%s' "$out" | grep -q 'cwd не проект'; then
+  pass "sessionstart.sh (cwd has AGENTS.md, negative control) -> no warning"
+else
+  fail "sessionstart.sh (cwd has AGENTS.md) -> rc=$rc, unexpected warning" "$out"
 fi
 
 # ===========================================================================
@@ -593,6 +660,195 @@ else
 fi
 
 # ===========================================================================
+group "install.sh keeps someone else's registration (T-187): KEPT, --force, missing file, doctor"
+# ===========================================================================
+# A registration of our hook (or the statusLine) that points at an EXISTING
+# file outside this clone is someone else's wiring — a canon checkout, another
+# copy, a user's own status line. install.sh must leave it and say KEPT;
+# --force points it here; a registration whose file is gone is ours to fix.
+# Run on two curated PATHs: with jq (the jq merge) and without (the python3
+# merge a stock machine without jq takes) — both must honour the decision.
+kept_settings() { # kept_settings <file> <dir with the foreign scripts>
+  cat > "$1" <<JSONEOF
+{
+  "statusLine": {"type": "command", "command": "bash $2/my-status.sh"},
+  "hooks": {
+    "UserPromptSubmit": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "bash $2/context-guard.sh", "timeout": 10}]}
+    ],
+    "PreCompact": [
+      {"hooks": [{"type": "command", "command": "if [ -f '$2/precompact.sh' ] && [ -r '$2/precompact.sh' ] && [ -x '$2/precompact.sh' ] && command -v bash >/dev/null 2>&1; then bash '$2/precompact.sh'; else { command -p cat 2>/dev/null || cat; } >/dev/null 2>&1 || :; fi", "timeout": 30}]}
+    ]
+  }
+}
+JSONEOF
+}
+# reg_report <settings> — "<event>=<the path its command names>" per line.
+reg_report() {
+  python3 - "$1" <<'PYEOF'
+import json, re, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+def first_path(cmd):
+    m = re.search(r"'([^']*/[^']*)'|(/[^\s;']+)", cmd or "")
+    return (m.group(1) or m.group(2)) if m else ""
+print("statusLine=" + first_path((d.get("statusLine") or {}).get("command")))
+for evt in ("UserPromptSubmit", "PostToolUse", "SessionStart", "PreCompact"):
+    cmds = [h.get("command", "") for it in d.get("hooks", {}).get(evt, []) for h in it.get("hooks", [])]
+    print("%s=%s" % (evt, ",".join(first_path(c) for c in cmds)))
+PYEOF
+}
+if command -v python3 >/dev/null 2>&1; then
+  kp_root="$(mktempdir)"
+  kp_foreign="$kp_root/canon"; mkdir -p "$kp_foreign"
+  # A canon-like copy: all four of our hook scripts sit together (N4 tells such
+  # a copy from another tool's same-name file by these neighbours).
+  for n in context-guard.sh precompact.sh sessionstart.sh autocheckpoint.sh my-status.sh; do printf '#!/bin/bash\nexit 0\n' > "$kp_foreign/$n"; chmod +x "$kp_foreign/$n"; done
+  if PATH="$FULL_PATH" command -v jq >/dev/null 2>&1; then mkminpath "$kp_root/path-jq" cp python3 jq; fi
+  mkminpath "$kp_root/path-nojq" cp python3
+  for variant in jq nojq; do
+    vp="$kp_root/path-$variant"
+    if [ "$variant" = jq ] && [ ! -e "$vp/jq" ]; then echo "SKIP  jq not installed — the jq merge branch is not exercised here"; continue; fi
+    # 1) KEPT: three foreign registrations survive, the two others are ours.
+    s="$kp_root/kept-$variant.json"; kept_settings "$s" "$kp_foreign"
+    k_out=$(PATH="$vp" HOME="$kp_root" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1); k_rc=$?
+    k_rep=$(reg_report "$s")
+    if [ "$k_rc" = 0 ] \
+       && printf '%s\n' "$k_rep" | grep -qxF "statusLine=$kp_foreign/my-status.sh" \
+       && printf '%s\n' "$k_rep" | grep -qxF "UserPromptSubmit=$kp_foreign/context-guard.sh" \
+       && printf '%s\n' "$k_rep" | grep -qxF "PreCompact=$kp_foreign/precompact.sh" \
+       && printf '%s\n' "$k_rep" | grep -qxF "PostToolUse=$HOOKS_DIR/context-guard.sh" \
+       && printf '%s\n' "$k_rep" | grep -qxF "SessionStart=$HOOKS_DIR/sessionstart.sh" \
+       && printf '%s\n' "$k_out" | grep -qxF "KEPT: statusLine → $kp_foreign/my-status.sh (registered elsewhere; re-run with --force to point it at this clone)" \
+       && printf '%s\n' "$k_out" | grep -qxF "KEPT: UserPromptSubmit → $kp_foreign/context-guard.sh (registered elsewhere; re-run with --force to point it at this clone)" \
+       && printf '%s\n' "$k_out" | grep -qxF "KEPT: PreCompact → $kp_foreign/precompact.sh (registered elsewhere; re-run with --force to point it at this clone)" \
+       && grep -q '"timeout": 30' "$s"; then
+      pass "[$variant] KEPT: foreign statusLine, UserPromptSubmit (bash <path>) and PreCompact (guard wrapper) stay, KEPT lines printed; PostToolUse/SessionStart point here"
+    else
+      fail "[$variant] KEPT: a foreign registration was overwritten or not reported (rc=$k_rc)" "$k_out | $k_rep"
+    fi
+    # 2) doctor accepts the kept wiring and names the paths.
+    d_out=$(PATH="$vp" CLAUDE_SETTINGS_PATH="$s" HOME="$kp_root" "$BASH_BIN" "$HOOKS_DIR/doctor.sh" 2>&1); d_rc=$?
+    if [ "$d_rc" = 0 ] \
+       && printf '%s\n' "$d_out" | grep -qF "OK   KEPT: statusLine → $kp_foreign/my-status.sh" \
+       && printf '%s\n' "$d_out" | grep -qF "OK   KEPT: UserPromptSubmit → $kp_foreign/context-guard.sh" \
+       && printf '%s\n' "$d_out" | grep -qF "OK   PostToolUse points at our context-guard.sh"; then
+      pass "[$variant] doctor.sh: kept registrations are OK and named by path, rc 0"
+    else
+      fail "[$variant] doctor.sh did not accept the kept registrations (rc=$d_rc)" "$d_out"
+    fi
+    # 3) --force: everything points at this clone, no KEPT line.
+    s="$kp_root/force-$variant.json"; kept_settings "$s" "$kp_foreign"
+    f_out=$(PATH="$vp" HOME="$kp_root" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" --force 2>&1); f_rc=$?
+    f_rep=$(reg_report "$s")
+    if [ "$f_rc" = 0 ] && ! printf '%s' "$f_out" | grep -q '^KEPT' && ! grep -qF "$kp_foreign" "$s" \
+       && printf '%s\n' "$f_out" | grep -qxF "REPLACED: statusLine bash $kp_foreign/my-status.sh → $HOOKS_DIR/statusline.sh" \
+       && printf '%s\n' "$f_out" | grep -qxF "REPLACED: UserPromptSubmit bash $kp_foreign/context-guard.sh → $HOOKS_DIR/context-guard.sh" \
+       && printf '%s\n' "$f_out" | grep -q "^REPLACED: PreCompact if \[ -f '$kp_foreign/precompact.sh' \].* → $HOOKS_DIR/precompact.sh$" \
+       && [ "$(printf '%s\n' "$f_out" | grep -c '^REPLACED: ')" = 3 ] \
+       && printf '%s\n' "$f_rep" | grep -qxF "statusLine=$HOOKS_DIR/statusline.sh" \
+       && printf '%s\n' "$f_rep" | grep -qxF "UserPromptSubmit=$HOOKS_DIR/context-guard.sh" \
+       && printf '%s\n' "$f_rep" | grep -qxF "PreCompact=$HOOKS_DIR/precompact.sh"; then
+      pass "[$variant] --force: every registration points at this clone, no KEPT line, REPLACED x3 names the old command (N4)"
+    else
+      fail "[$variant] --force did not repoint the foreign registrations (rc=$f_rc)" "$f_out | $f_rep"
+    fi
+    # 4) the registered file is gone -> upsert as before (ours to repair).
+    s="$kp_root/gone-$variant.json"; kept_settings "$s" "$kp_root/gone"
+    g_out=$(PATH="$vp" HOME="$kp_root" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1); g_rc=$?
+    g_rep=$(reg_report "$s")
+    if [ "$g_rc" = 0 ] && ! printf '%s' "$g_out" | grep -q '^KEPT' \
+       && printf '%s\n' "$g_rep" | grep -qxF "statusLine=$HOOKS_DIR/statusline.sh" \
+       && printf '%s\n' "$g_rep" | grep -qxF "UserPromptSubmit=$HOOKS_DIR/context-guard.sh" \
+       && printf '%s\n' "$g_rep" | grep -qxF "PreCompact=$HOOKS_DIR/precompact.sh" \
+       && grep -q '"timeout": 30' "$s"; then
+      pass "[$variant] registered file missing -> upsert to this clone (manual timeout 30 kept), no KEPT line"
+    else
+      fail "[$variant] a registration pointing at a missing file was not repaired (rc=$g_rc)" "$g_out | $g_rep"
+    fi
+    # 4b) a statusLine command with NO file path (npx ccusage statusline) is
+    #     the user's own choice: KEPT without --force, ours with --force.
+    s="$kp_root/npx-$variant.json"
+    printf '{"statusLine":{"type":"command","command":"npx ccusage statusline"}}' > "$s"
+    n_out=$(PATH="$vp" HOME="$kp_root" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1); n_rc=$?
+    n_dr=$(PATH="$vp" CLAUDE_SETTINGS_PATH="$s" HOME="$kp_root" "$BASH_BIN" "$HOOKS_DIR/doctor.sh" 2>&1); n_drc=$?
+    if [ "$n_rc" = 0 ] && grep -qF 'npx ccusage statusline' "$s" && ! grep -qF "$HOOKS_DIR/statusline.sh" "$s" \
+       && printf '%s\n' "$n_out" | grep -qxF "KEPT: statusLine → npx ccusage statusline (registered elsewhere; re-run with --force to point it at this clone)" \
+       && [ "$n_drc" = 0 ] && printf '%s\n' "$n_dr" | grep -qF "OK   KEPT: statusLine → npx ccusage statusline"; then
+      pass "[$variant] statusLine without a file path stays, KEPT line printed; doctor rc 0 names the command"
+    else
+      fail "[$variant] a path-less foreign statusLine was replaced or not reported (rc=$n_rc, doctor rc=$n_drc)" "$n_out | $n_dr"
+    fi
+    n2_out=$(PATH="$vp" HOME="$kp_root" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" --force 2>&1); n2_rc=$?
+    if [ "$n2_rc" = 0 ] && ! printf '%s' "$n2_out" | grep -q '^KEPT' && ! grep -qF 'npx ccusage' "$s" \
+       && grep -qF "$HOOKS_DIR/statusline.sh" "$s"; then
+      pass "[$variant] --force replaces a path-less statusLine with this clone's"
+    else
+      fail "[$variant] --force did not repoint a path-less statusLine (rc=$n2_rc)" "$n2_out"
+    fi
+    # 4b2) words with a "/" that are not file paths (scoped npm package, sed
+    #      expression in a pipeline) are a command, not a path -> KEPT as well.
+    #      $HOME/... and ${HOME}/... are paths: expanded, then -f decides.
+    mkdir -p "$kp_root/homedir"; printf '#!/bin/bash\nexit 0\n' > "$kp_root/homedir/ext-status.sh"
+    while IFS='~' read -r label cmd verdict; do
+      s="$kp_root/p-$variant-$label.json"
+      python3 -c 'import json,sys; json.dump({"statusLine":{"type":"command","command":sys.argv[1]}}, open(sys.argv[2],"w"))' "$cmd" "$s"
+      p_out=$(PATH="$vp" HOME="$kp_root" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1); p_rc=$?
+      if [ "$verdict" = kept ]; then
+        if [ "$p_rc" = 0 ] && printf '%s\n' "$p_out" | grep -qF "KEPT: statusLine" && ! grep -qF "$HOOKS_DIR/statusline.sh" "$s"; then
+          pass "[$variant] statusLine '$label' ($cmd) is kept"
+        else fail "[$variant] statusLine '$label' was replaced (rc=$p_rc)" "$p_out"; fi
+      else
+        if [ "$p_rc" = 0 ] && ! printf '%s\n' "$p_out" | grep -qF "KEPT: statusLine" && grep -qF "$HOOKS_DIR/statusline.sh" "$s"; then
+          pass "[$variant] statusLine '$label' ($cmd) is repaired to this clone"
+        else fail "[$variant] statusLine '$label' was kept (rc=$p_rc)" "$p_out"; fi
+      fi
+    done <<LIST
+scoped~npx -y @owloops/claude-powerline@latest~kept
+pipeline~jq -r .model.display_name | sed s/a/b/~kept
+homevar~bash \$HOME/homedir/ext-status.sh~kept
+homebrace~bash \${HOME}/homedir/ext-status.sh~kept
+homegone~bash \$HOME/homedir/gone-status.sh~ours
+LIST
+    # 4c) a statusLine on a missing file (any name) -> ours.
+    s="$kp_root/slgone-$variant.json"
+    printf '{"statusLine":{"type":"command","command":"bash %s/gone/my-status.sh"}}' "$kp_root" > "$s"
+    m_out=$(PATH="$vp" HOME="$kp_root" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1); m_rc=$?
+    if [ "$m_rc" = 0 ] && ! printf '%s' "$m_out" | grep -q '^KEPT: statusLine' && grep -qF "$HOOKS_DIR/statusline.sh" "$s"; then
+      pass "[$variant] statusLine on a missing file -> repaired to this clone"
+    else
+      fail "[$variant] a statusLine on a missing file was kept (rc=$m_rc)" "$m_out"
+    fi
+  done
+  # 5) doctor weighs every matching registration, not the first: a dead
+  #    entry in front of ours must not turn a working install into FAIL.
+  s="$kp_root/doctor-order.json"
+  CLAUDE_SETTINGS_PATH="$s" HOME="$kp_root" "$BASH_BIN" "$HOOKS_DIR/install.sh" >/dev/null 2>&1
+  python3 - "$s" "$kp_root/gone" <<'PYEOF'
+import json, sys
+p, gone = sys.argv[1:3]
+d = json.load(open(p, encoding="utf-8"))
+d["hooks"]["UserPromptSubmit"].insert(0, {"matcher": "*", "hooks": [{"type": "command", "command": "bash %s/context-guard.sh" % gone}]})
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+  do_out=$(CLAUDE_SETTINGS_PATH="$s" HOME="$kp_root" "$BASH_BIN" "$HOOKS_DIR/doctor.sh" 2>&1); do_rc=$?
+  if [ "$do_rc" = 0 ] && printf '%s\n' "$do_out" | grep -qxF "OK   UserPromptSubmit points at our context-guard.sh"; then
+    pass "doctor.sh: a dead registration in front of ours does not hide it (OK, rc 0)"
+  else
+    fail "doctor.sh judged by the first registration only (rc=$do_rc)" "$do_out"
+  fi
+  # 6) unknown flag -> rc 2, settings untouched.
+  s="$kp_root/flag.json"; kept_settings "$s" "$kp_foreign"; cp "$s" "$s.orig"
+  CLAUDE_SETTINGS_PATH="$s" HOME="$kp_root" "$BASH_BIN" "$HOOKS_DIR/install.sh" --frce >/dev/null 2>&1; u_rc=$?
+  if [ "$u_rc" = 2 ] && cmp -s "$s" "$s.orig"; then
+    pass "unknown flag (--frce) -> rc 2, settings.json untouched"
+  else
+    fail "unknown flag was not refused (rc=$u_rc)"
+  fi
+else
+  echo "SKIP  python3 not available — install.sh needs it anyway"
+fi
+
+# ===========================================================================
 group "doctor.sh on a single-line (minified) settings.json"
 # ===========================================================================
 sandbox2="$(mktempdir)"
@@ -631,14 +887,206 @@ group "Negative control 2/2: a mutated default threshold MUST turn threshold-par
 mut2="$(mktempdir)"
 cp -R "$ROOT/hooks" "$ROOT/tests" "$mut2/"
 # Same mutation T-014 used to prove this suite isn't always-green: statusline's
-# z1 default only (60 -> 40), guard's default left untouched on purpose.
-sed -i.bak 's/local z1=60 z2=80/local z1=40 z2=80/' "$mut2/hooks/statusline.sh" && rm -f "$mut2/hooks/statusline.sh.bak"
+# z1 default only (40 -> 45), guard's default left untouched on purpose.
+# Since T-164 the defaults are 40/60/75, so the mutant must use a value that is
+# NOT a default threshold (45), and the sed anchor must be checked: a no-match
+# sed is a silent no-op that would make this control meaningless.
+sed -i.bak 's/local z1=40 z2=60/local z1=45 z2=60/' "$mut2/hooks/statusline.sh" && rm -f "$mut2/hooks/statusline.sh.bak"
+grep -q 'local z1=45 z2=60' "$mut2/hooks/statusline.sh" || fail "negative control 2/2: mutation anchor 'local z1=40 z2=60' not found in statusline.sh — control would be a no-op"
 mut_tp_out=$("$BASH_BIN" "$mut2/tests/threshold-parity.sh" 2>&1); mut_tp_rc=$?
 if [ "$mut_tp_rc" != 0 ] && printf '%s' "$mut_tp_out" | grep -q '^RESULT: RED$'; then
   n_fail=$(printf '%s' "$mut_tp_out" | grep -oE '^TOTAL: [0-9]+/[0-9]+')
-  pass "mutated copy (statusline z1=40, guard unchanged) -> threshold-parity.sh correctly reports RED ($n_fail)"
+  pass "mutated copy (statusline z1=45, guard unchanged) -> threshold-parity.sh correctly reports RED ($n_fail)"
 else
   fail "mutated copy did NOT turn threshold-parity.sh red — negative control is not sensitive" "$mut_tp_out"
+fi
+
+# ===========================================================================
+group "QA 2.0.0 installer: R1 (group neighbours), R2 (quote in the path), Y1 (no python3), Y2 (older clone)"
+# ===========================================================================
+# clone_copy DIR — a copy of this distribution's install surface (what a clone holds).
+clone_copy() { mkdir -p "$1"; cp -R "$ROOT/hooks" "$ROOT/skills" "$ROOT/install.sh" "$ROOT/.claude-plugin" "$1/"; }
+if command -v python3 >/dev/null 2>&1; then
+  qa_root="$(mktempdir)"; qa_root="$(cd "$qa_root" && pwd)"   # TMPDIR may end in "/": normalise like install.sh does
+  # R2: a clone under "Mike's tools/папка с пробелом" — every registered command runs (rc 0), doctor all OK.
+  qa_c="$qa_root/Mike's tools/папка с пробелом"; clone_copy "$qa_c"; mkdir -p "$qa_root/h"
+  printf '{}' > "$qa_root/r2.json"
+  r2_out=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$qa_root/r2.json" "$BASH_BIN" "$qa_c/install.sh" 2>&1); r2_rc=$?
+  r2_bad=""
+  for evt in UserPromptSubmit PostToolUse SessionStart PreCompact; do
+    cmd=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["hooks"][sys.argv[2]][0]["hooks"][0]["command"])' "$qa_root/r2.json" "$evt")
+    for sh_bin in /bin/sh /bin/dash; do
+      [ -x "$sh_bin" ] || continue
+      printf '{}' | HOME="$qa_root/h" "$sh_bin" -c "$cmd" >/dev/null 2>&1 || r2_bad="$r2_bad $evt($sh_bin rc=$?)"
+    done
+  done
+  if [ "$r2_rc" = 0 ] && [ -z "$r2_bad" ] && ! printf '%s' "$r2_out" | grep -q '^FAIL'; then
+    pass "R2: clone path with a quote, a space and Cyrillic -> install rc 0, doctor without FAIL, every hook command rc 0 under sh/dash"
+  else
+    fail "R2: quote in the clone path broke the registration (rc=$r2_rc)" "bad:$r2_bad | $(printf '%s' "$r2_out" | grep '^FAIL' | head -3)"
+  fi
+  # R1: a foreign command in the same group as ours and a narrowed matcher survive a re-install (jq and python merges).
+  if PATH="$FULL_PATH" command -v jq >/dev/null 2>&1; then mkminpath "$qa_root/p-jq" cp python3 jq; fi
+  mkminpath "$qa_root/p-nojq" cp python3
+  for variant in jq nojq; do
+    vp="$qa_root/p-$variant"
+    [ "$variant" = jq ] && [ ! -e "$vp/jq" ] && { echo "SKIP  jq not installed — R1 jq merge not exercised"; continue; }
+    s="$qa_root/r1-$variant.json"; printf '{}' > "$s"
+    PATH="$vp" HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" >/dev/null 2>&1
+    python3 - "$s" <<'PYEOF2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+g = d["hooks"]["PostToolUse"][0]; g["matcher"] = "Bash|Edit|Write"
+g["hooks"].append({"type": "command", "command": "/usr/bin/true # my-audit-hook"})
+d["hooks"]["UserPromptSubmit"].append({"matcher": "x", "hooks": [{"type": "command", "command": "echo keep-me"}, {"type": "command", "command": "bash /gone/old/context-guard.sh"}]})
+json.dump(d, open(p, "w"))
+PYEOF2
+    PATH="$vp" HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" >/dev/null 2>&1; r1_rc=$?
+    cp "$s" "$s.1"; PATH="$vp" HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" >/dev/null 2>&1
+    r1_rep=$(python3 - "$s" "$HOOKS_DIR" <<'PYEOF2'
+import json, sys
+d = json.load(open(sys.argv[1])); here = sys.argv[2]
+def sig(g): return (g.get("matcher"), ["OURS" if here + "/context-guard.sh" in h["command"] else h["command"] for h in g["hooks"]])
+print(sig(d["hooks"]["PostToolUse"][0]), len(d["hooks"]["PostToolUse"]), [sig(g) for g in d["hooks"]["UserPromptSubmit"]])
+PYEOF2
+)
+    want="('Bash|Edit|Write', ['OURS', '/usr/bin/true # my-audit-hook']) 1 [('*', ['OURS']), ('x', ['echo keep-me'])]"
+    if [ "$r1_rc" = 0 ] && [ "$r1_rep" = "$want" ] && cmp -s "$s" "$s.1"; then
+      pass "[$variant] R1: only our command replaced in place — neighbour hook and matcher kept, our duplicate in another group removed, idempotent"
+    else
+      fail "[$variant] R1: the group around our command was not preserved (rc=$r1_rc)" "$r1_rep"
+    fi
+  done
+  # Y1: jq but no python3 -> the installer refuses BEFORE any write (no skills copied, settings untouched).
+  mkminpath "$qa_root/p-y1" cp jq
+  printf '{"model":"opus"}' > "$qa_root/y1.json"; cp "$qa_root/y1.json" "$qa_root/y1.orig"; mkdir -p "$qa_root/hy1"
+  y1_out=$(PATH="$qa_root/p-y1" HOME="$qa_root/hy1" CLAUDE_SETTINGS_PATH="$qa_root/y1.json" "$BASH_BIN" "$ROOT/install.sh" 2>&1); y1_rc=$?
+  y1h_out=$(PATH="$qa_root/p-y1" HOME="$qa_root/hy1" CLAUDE_SETTINGS_PATH="$qa_root/y1-missing.json" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1); y1h_rc=$?
+  if [ "$y1_rc" = 1 ] && printf '%s' "$y1_out" | grep -q 'python3 is required' && ! printf '%s' "$y1_out" | grep -q 'invalid JSON' \
+     && [ ! -e "$qa_root/hy1/.claude/skills" ] && cmp -s "$qa_root/y1.json" "$qa_root/y1.orig" && ! ls "$qa_root"/y1.json.bak-* >/dev/null 2>&1 \
+     && [ "$y1h_rc" = 1 ] && printf '%s' "$y1h_out" | grep -q 'python3 is required' && [ ! -e "$qa_root/y1-missing.json" ]; then
+    pass "Y1: jq without python3 -> «python3 is required», rc 1, no skills copied, settings untouched, no backup, no file created"
+  else
+    fail "Y1: install without python3 was not refused cleanly (rc=$y1_rc / $y1h_rc)" "$y1_out | $y1h_out"
+  fi
+  # Y2: registrations of an OLDER pf-handoff clone are moved here (MOVED x5), doctor warns before; a canon-like copy without plugin.json stays KEPT.
+  qa_old="$qa_root/old-clone"; clone_copy "$qa_old"
+  s="$qa_root/y2.json"; printf '{}' > "$s"
+  HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$qa_old/hooks/install.sh" >/dev/null 2>&1
+  y2_dr=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/doctor.sh" 2>&1); y2_drc=$?
+  y2_out=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1); y2_rc=$?
+  y2_dr2=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/doctor.sh" 2>&1); y2_drc2=$?
+  if [ "$y2_drc" = 0 ] && [ "$(printf '%s\n' "$y2_dr" | grep -c '^WARN .*points at another pf-handoff clone')" = 5 ] \
+     && [ "$y2_rc" = 0 ] && [ "$(printf '%s\n' "$y2_out" | grep '^MOVED: ' | grep -F "$qa_old/hooks/" | grep -cF "→ $HOOKS_DIR/")" = 5 ] \
+     && ! grep -qF "$qa_old" "$s" && [ "$y2_drc2" = 0 ] && ! printf '%s' "$y2_dr2" | grep -qE '^(WARN|FAIL)'; then
+    pass "Y2: older clone -> doctor WARN x5 (rc 0), install MOVED x5, everything points here, doctor clean afterwards"
+  else
+    fail "Y2: older clone not moved or not reported" "drc=$y2_drc rc=$y2_rc drc2=$y2_drc2 warn=$(printf '%s\n' "$y2_dr" | grep -c '^WARN') moved=$(printf '%s\n' "$y2_out" | grep -c '^MOVED') left=$(grep -cF "$qa_old" "$s") after=$(printf '%s' "$y2_dr2" | grep -E '^(WARN|FAIL)' | head -2)"
+  fi
+  # A v1.10.0-style clone (no .claude-plugin/, the shipped skills/pf-handoff/SKILL.md names it) is ours too.
+  qa_v110="$qa_root/v110-clone"; clone_copy "$qa_v110"; rm -rf "$qa_v110/.claude-plugin"
+  s="$qa_root/y2v.json"; printf '{}' > "$s"
+  HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$qa_v110/hooks/install.sh" >/dev/null 2>&1
+  y2v_out=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1)
+  if [ "$(printf '%s\n' "$y2v_out" | grep -c '^MOVED: ')" = 5 ] && ! grep -qF "$qa_v110" "$s"; then
+    pass "Y2: a v1.10.0-style clone (no plugin.json, skills/pf-handoff/SKILL.md) is moved as well"
+  else
+    fail "Y2: v1.10.0-style clone not moved" "$y2v_out"
+  fi
+  # Control: the workshop canon layout (<workshop>/context-hooks/, no install.sh, no skills/ beside it) stays KEPT.
+  qa_canon="$qa_root/workshop/context-hooks"; mkdir -p "$qa_canon"; cp "$HOOKS_DIR"/*.sh "$qa_canon/"
+  s="$qa_root/y2c.json"; printf '{}' > "$s"
+  HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$qa_canon/install.sh" >/dev/null 2>&1
+  y2c_out=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1)
+  if [ "$(printf '%s\n' "$y2c_out" | grep -c '^KEPT: ')" = 5 ] && ! printf '%s' "$y2c_out" | grep -q '^MOVED'; then
+    pass "Y2 control: the workshop canon layout (context-hooks/, no clone markers) stays KEPT"
+  else
+    fail "Y2 control: canon-like copy was moved" "$y2c_out"
+  fi
+  # N4: another tool's hook that merely shares our file name (precompact.sh,
+  # none of our scripts next to it) stays KEPT, but loudly: `WARN: KEPT:`
+  # from the installer and WARN (not OK) from doctor; --force names it in a
+  # REPLACED line before replacing it.
+  qa_oth="$qa_root/other/hooks"; mkdir -p "$qa_oth"; printf '#!/bin/bash\nexit 0\n' > "$qa_oth/precompact.sh"; chmod +x "$qa_oth/precompact.sh"
+  s="$qa_root/n4.json"
+  printf '{"hooks":{"PreCompact":[{"hooks":[{"type":"command","command":"bash %s/precompact.sh"}]}]}}' "$qa_oth" > "$s"
+  n4_out=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1); n4_rc=$?
+  n4_dr=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/doctor.sh" 2>&1)
+  if [ "$n4_rc" = 0 ] && printf '%s\n' "$n4_out" | grep -qF "WARN: KEPT: PreCompact → $qa_oth/precompact.sh is not a pf-handoff hook" \
+     && printf '%s\n' "$n4_out" | grep -qF "our PreCompact hook is NOT installed" && ! printf '%s\n' "$n4_out" | grep -q '^KEPT: PreCompact' \
+     && grep -qF "$qa_oth/precompact.sh" "$s" && ! grep -qF "$HOOKS_DIR/precompact.sh" "$s" \
+     && printf '%s\n' "$n4_dr" | grep -qF "WARN KEPT: PreCompact → $qa_oth/precompact.sh is not a pf-handoff hook" \
+     && ! printf '%s\n' "$n4_dr" | grep -q '^OK   KEPT: PreCompact'; then
+    pass "N4: a foreign same-name hook stays, installer prints WARN: KEPT (our hook NOT installed), doctor WARN, not OK"
+  else
+    fail "N4: a foreign same-name hook was kept silently" "rc=$n4_rc out=$n4_out | doctor=$(printf '%s' "$n4_dr" | grep PreCompact)"
+  fi
+  n4f_out=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" --force 2>&1); n4f_rc=$?
+  if [ "$n4f_rc" = 0 ] && printf '%s\n' "$n4f_out" | grep -qxF "REPLACED: PreCompact bash $qa_oth/precompact.sh → $HOOKS_DIR/precompact.sh" \
+     && ! grep -qF "$qa_oth" "$s" && grep -qF "$HOOKS_DIR/precompact.sh" "$s"; then
+    pass "N4: --force prints «REPLACED: PreCompact <old command> → <ours>» before replacing the foreign hook"
+  else
+    fail "N4: --force replaced the foreign hook without a REPLACED line" "rc=$n4f_rc out=$n4f_out"
+  fi
+  # N4 step 2 (fix round 1): an older v1.10.0-style clone plus a foreign
+  # sessionstart.sh in the same event — all five registrations of the old
+  # clone are MOVED here (SessionStart too), the foreign hook stays next to
+  # ours with WARN: KEPT; doctor is then clean for SessionStart (no looping
+  # «install.sh moves it here»); a second run changes nothing.
+  qa_old2="$qa_root/old-clone2"; clone_copy "$qa_old2"; rm -rf "$qa_old2/.claude-plugin"
+  s="$qa_root/n4b.json"; printf '{}' > "$s"
+  HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$qa_old2/hooks/install.sh" >/dev/null 2>&1
+  printf '#!/bin/bash\nexit 0\n' > "$qa_oth/sessionstart.sh"; chmod +x "$qa_oth/sessionstart.sh"
+  python3 - "$s" "$qa_oth/sessionstart.sh" <<'PYEOF2'
+import json, sys
+d = json.load(open(sys.argv[1])); d["hooks"]["SessionStart"][0]["hooks"].append({"type": "command", "command": "bash " + sys.argv[2]})
+json.dump(d, open(sys.argv[1], "w"))
+PYEOF2
+  n4b_out=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1)
+  n4b_rep=$(reg_report "$s")
+  n4b_dr=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/doctor.sh" 2>&1)
+  cp "$s" "$s.1"; n4b_out2=$(HOME="$qa_root/h" CLAUDE_SETTINGS_PATH="$s" "$BASH_BIN" "$HOOKS_DIR/install.sh" 2>&1)
+  if [ "$(printf '%s\n' "$n4b_out" | grep -c '^MOVED: ')" = 5 ] \
+     && printf '%s\n' "$n4b_out" | grep -qF "MOVED: SessionStart $qa_old2/hooks/sessionstart.sh → $HOOKS_DIR/sessionstart.sh" \
+     && printf '%s\n' "$n4b_out" | grep -qF "WARN: KEPT: SessionStart → $qa_oth/sessionstart.sh is not a pf-handoff hook" \
+     && printf '%s\n' "$n4b_rep" | grep -qxF "SessionStart=$HOOKS_DIR/sessionstart.sh,$qa_oth/sessionstart.sh" \
+     && ! grep -qF "$qa_old2" "$s" \
+     && printf '%s\n' "$n4b_dr" | grep -qF "OK   SessionStart points at our sessionstart.sh" \
+     && ! printf '%s\n' "$n4b_dr" | grep -q 'another pf-handoff clone' \
+     && cmp -s "$s" "$s.1" && ! printf '%s\n' "$n4b_out2" | grep -q '^MOVED'; then
+    pass "N4: v1.10.0 clone + foreign sessionstart.sh -> MOVED x5 (SessionStart too), foreign stays next to ours (WARN: KEPT), doctor OK, re-run idempotent"
+  else
+    fail "N4: older clone left in SessionStart next to a foreign same-name hook" "out=$n4b_out | rep=$n4b_rep | dr=$(printf '%s' "$n4b_dr" | grep SessionStart) | out2=$n4b_out2"
+  fi
+else
+  echo "SKIP  python3 not available — the installer requires it"
+fi
+
+# ===========================================================================
+group "private-word stop-list (PF_PRIVATE_WORDS, owner-only; silent without it)"
+# ===========================================================================
+# The list itself lives outside this repository (the author's workshop) and
+# never ships. Without PF_PRIVATE_WORDS (a friend's machine) the group is skipped.
+pw_scan() { # pw_scan ROOT WORDS-FILE -> matching file names / files, one per line
+  local root="$1" words; words="$(mktempdir)/w"
+  { grep -v '^[[:space:]]*#' "$2" || true; } | sed 's/[[:space:]]*$//' | { grep -v '^$' || true; } > "$words"
+  [ -s "$words" ] || { echo "EMPTY-LIST"; return 0; }
+  (cd "$root" && find . \( -name .git -o -name .claude -o -name .agents -o -path ./evals/results \) -prune -o -type f -print \
+     | { grep -iF -f "$words" || true; } | sed 's/^/name: /'
+   cd "$root" && find . \( -name .git -o -name .claude -o -name .agents -o -path ./evals/results \) -prune -o -type f -print0 \
+     | xargs -0 grep -IilF -f "$words" 2>/dev/null | sed 's/^/text: /')
+}
+if [ -n "${PF_PRIVATE_WORDS:-}" ] && [ -r "$PF_PRIVATE_WORDS" ]; then
+  pw_out=$(pw_scan "$ROOT" "$PF_PRIVATE_WORDS")
+  [ -z "$pw_out" ] && pass "no private word in the distribution tree" || fail "private words found in the distribution tree" "$pw_out"
+  # Negative control: one word of the list planted into a copy -> found.
+  pw_mut="$(mktempdir)"; cp -R "$ROOT/README.md" "$ROOT/docs" "$pw_mut/"
+  pw_word=$({ grep -v '^[[:space:]]*#' "$PF_PRIVATE_WORDS" || true; } | sed 's/[[:space:]]*$//' | { grep -v '^$' || true; } | head -1)
+  printf '\nplanted: %s\n' "$pw_word" >> "$pw_mut/README.md"
+  pw_mout=$(pw_scan "$pw_mut" "$PF_PRIVATE_WORDS")
+  printf '%s' "$pw_mout" | grep -qx 'text: ./README.md' && pass "negative control: a planted word in a copy of README.md is found" || fail "negative control: planted word not found" "$pw_mout"
+else
+  echo "SKIP  PF_PRIVATE_WORDS not set — the private-word stop-list is the author's (not shipped)"
 fi
 
 # ===========================================================================

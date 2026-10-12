@@ -21,10 +21,10 @@ set -u
 
 PF_EFFECTIVE_HOME="${HOME:-${TMPDIR:-/tmp}}"
 
-SESSION="" CWD_IN="" TRANSCRIPT="" REASON="unspecified"
+SESSION="" SESSION_GIVEN=0 CWD_IN="" TRANSCRIPT="" REASON="unspecified"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --session)    SESSION="${2:-}"; shift 2 ;;
+    --session)    SESSION="${2:-}"; SESSION_GIVEN=1; shift 2 ;;
     --cwd)        CWD_IN="${2:-}"; shift 2 ;;
     --transcript) TRANSCRIPT="${2:-}"; shift 2 ;;
     --reason)     REASON="${2:-}"; shift 2 ;;
@@ -32,6 +32,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# No `--session` flag at all — not our caller (both callers, precompact.sh and
+# context-guard.sh, always pass it, even empty): e.g. a foreign platform that
+# ran this file as a hook with its JSON on stdin. Not ours to judge — exit 0
+# with no output (T-166). An EMPTY --session from our caller stays rc=1 below:
+# precompact.sh blocks the compaction on it.
+[ "$SESSION_GIVEN" = 1 ] || exit 0
 [ -n "$SESSION" ] || { echo "autocheckpoint: пустой session_id" >&2; exit 1; }
 # session_id становится именем файла — только безопасные символы.
 case "$SESSION" in *[!A-Za-z0-9._-]*) echo "autocheckpoint: недопустимый session_id" >&2; exit 1 ;; esac
@@ -128,6 +134,14 @@ write_to() {
   local base="$1" target tmp
   mkdir -p "$base" 2>/dev/null || return 1
   [ -d "$base" ] && [ -w "$base" ] || return 1
+  # В каталоге HANDOFF проекта нет .gitignore — кладём его, игнорирующий всё,
+  # кроме себя (QA 2.0.0, Y4): снимок хранит дословные реплики человека, и
+  # `git add -A` не должен уносить его в коммит. И в существующий каталог
+  # тоже — он есть у всех, кто работал на v1.10.0 (QA 2.0.0, N3). Симлинк на
+  # месте .gitignore не трогаем (I-037).
+  if [ "${2:-}" = project ] && [ ! -e "$base/.gitignore" ] && [ ! -L "$base/.gitignore" ]; then
+    printf '*\n!.gitignore\n' > "$base/.gitignore" 2>/dev/null
+  fi
   target="$base/$TODAY-auto-$SESSION.md"
   [ -L "$target" ] && { echo "autocheckpoint: цель — симлинк, запись отменена: $target" >&2; return 1; }
   tmp="$base/.tmp.autockpt.$$.$RANDOM"
@@ -172,7 +186,7 @@ write_to() {
 # отказа, чем у произвольного рабочего каталога). Блокировка сжатия наступает
 # только если не удалось НИ ТУДА, НИ СЮДА.
 if [ -n "$CWD_IN" ] && [ -d "$CWD_IN/.agents" ]; then
-  write_to "$CWD_IN/.agents/runtime/handoff" && exit 0
+  write_to "$CWD_IN/.agents/runtime/handoff" project && exit 0
 fi
 write_to "$PF_EFFECTIVE_HOME/.claude/context-state/handoff" && exit 0
 

@@ -7,6 +7,9 @@
 #    и напечатать свою строку; 4) атомарно сохранить состояние сессии для
 #    context-guard.sh.
 set -u
+# Дочерний CLI council.sh (PF_COUNCIL_RUN=1) — молчим, вход сливаем, rc 0
+# (QA 2.0.0, тихий режим). --preview работает и с переменной.
+if [ "${PF_COUNCIL_RUN:-}" = 1 ] && [ "${1:-}" != "--preview" ]; then cat >/dev/null 2>&1; exit 0; fi
 # Контракт «всегда exit 0»: без HOME не падаем (QA №3), числа — с точкой (не запятой).
 # $HOME САМ не переопределяем (F-20): чужой код ниже по стеку (дочерние
 # команды, будущие правки) не должен принять временный каталог за настоящий
@@ -50,7 +53,7 @@ run() {
   command -v jq >/dev/null 2>&1 && has_jq=1
 
   local row session_id pct_raw window_raw tokens_raw model_name effort_lvl
-  local lines_add lines_del cost_usd dur_ms five_pct five_reset seven_pct seven_reset cwd_in
+  local lines_add lines_del cost_usd dur_ms sess_pct sess_reset week_pct week_reset cwd_in
   if [ "$has_jq" = 1 ]; then
     row=$(printf '%s' "$input" | jq -r '
       [
@@ -101,7 +104,7 @@ row = [re.sub(r"[\x00-\x1f\x7f]", " ", x) for x in row]
 print("\x1f".join(row))' 2>/dev/null)
   fi
 
-  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name effort_lvl lines_add lines_del cost_usd dur_ms five_pct five_reset seven_pct seven_reset cwd_in <<< "$row"
+  IFS=$'\x1f' read -r session_id pct_raw window_raw tokens_raw model_name effort_lvl lines_add lines_del cost_usd dur_ms sess_pct sess_reset week_pct week_reset cwd_in <<< "$row"
   # effort.level — только известные значения (поле опционально: старые CLI/модели без effort его не шлют).
   case "${effort_lvl:-}" in low|medium|high|xhigh|max) : ;; *) effort_lvl="" ;; esac
 
@@ -183,38 +186,26 @@ print("\x1f".join(re.sub(r"[\x00-\x1f\x7f]", " ", x) for x in row))' "$cfg_file"
       200000)  win_label="200k" ;;
       *) win_label=$(awk -v w="$window_raw" 'BEGIN{ if (w>=1000000) printf "%.1fM", w/1000000; else printf "%dk", int(w/1000) }') ;;
     esac
-    # Границы цветовых зон — из порогов ПРОЕКТА (.agents/context-budget.json в cwd),
-    # чтобы бар краснел там же, где guard шлёт директивы; нет конфига — 60/80.
-    local z1=60 z2=80 zrow=""
-    if [ -n "${cwd_in:-}" ] && [ -f "$cwd_in/.agents/context-budget.json" ] && [ -r "$cwd_in/.agents/context-budget.json" ]; then
-      if [ "$has_jq" = 1 ]; then
-        zrow=$(jq -r 'if (.thresholds|type)=="array" and (.thresholds|length)==3 then (.thresholds|map(tostring)|join("\t")) else "" end' "$cwd_in/.agents/context-budget.json" 2>/dev/null)
-      else
-        zrow=$(python3 -c '
-import json, sys
-try:
-    tt = json.load(open(sys.argv[1], encoding="utf-8-sig")).get("thresholds")
-    assert isinstance(tt, list) and len(tt) == 3
-    print("\t".join(str(x) for x in tt))
-except Exception:
-    print("")' "$cwd_in/.agents/context-budget.json" 2>/dev/null)
-      fi
-      # Валидация ровно та же, что в context-guard.sh (три целых 1–99 по
-      # возрастанию; дробные и любой мусор — молча дефолт). Иначе бар красился
-      # бы по одним границам, а guard слал директивы по другим. Разделитель —
-      # табуляция, а не пробел: значение вида "60 70" внутри JSON иначе
-      # распалось бы на два поля и проехало валидацию.
-      if [ -n "$zrow" ]; then
-        local c1 c2 c3
-        IFS=$'\t' read -r c1 c2 c3 <<< "$zrow"
+    # Границы цветовых зон — те же пороги, что у context-guard.sh: по умолчанию
+    # 40/60/75 % окна, переопределение — переменная CONTEXT_GUARD_THRESHOLDS
+    # (три целых через пробел по возрастанию, 1–99; иначе молча дефолт).
+    # Разбор ровно тот же, что в guard: иначе бар красился бы по одним
+    # границам, а директивы шли бы по другим. Бар знает две границы: жёлтая с
+    # t1, красная с t2 (t3 — только у guard).
+    local z1=40 z2=60
+    if [ -n "${CONTEXT_GUARD_THRESHOLDS:-}" ]; then
+      local c1 c2 c3 cx
+      read -r c1 c2 c3 cx <<< "$CONTEXT_GUARD_THRESHOLDS"
+      if [ -n "${c1:-}" ] && [ -n "${c2:-}" ] && [ -n "${c3:-}" ] && [ -z "${cx:-}" ]; then
         case "$c1$c2$c3" in
-          *[!0-9]*|'') : ;;
+          *[!0-9]*) : ;;
           *)
-            if [ "$c1" -ge 1 ] 2>/dev/null && [ "$c1" -lt "$c2" ] 2>/dev/null \
-               && [ "$c2" -lt "$c3" ] 2>/dev/null && [ "$c3" -le 99 ] 2>/dev/null; then
-              z1="$c1"; z2="$c2"
-            fi
-            ;;
+            if [ "${#c1}" -le 2 ] && [ "${#c2}" -le 2 ] && [ "${#c3}" -le 2 ]; then
+              c1=$((10#$c1)); c2=$((10#$c2)); c3=$((10#$c3))
+              if [ "$c1" -ge 1 ] && [ "$c1" -lt "$c2" ] && [ "$c2" -lt "$c3" ] && [ "$c3" -le 99 ]; then
+                z1="$c1"; z2="$c2"
+              fi
+            fi ;;
         esac
       fi
     fi
@@ -236,19 +227,22 @@ except Exception:
   # Виджеты. Каждый печатает свой текст или ничего (данных нет — сегмент исчезает).
   seg_model()   { [ -n "${model_name:-}" ] && printf '%s' "${C_LBL}Model:${C_RST} ${C_VAL}${model_name}${C_RST}"; }
   seg_effort()  { [ -n "${effort_lvl:-}" ] && printf '%s' "${C_LBL}Effort:${C_RST} ${C_VAL}${effort_lvl}${C_RST}"; }
-  seg_context() { [ "$ctx_ok" = 1 ] && printf '%s' "${C_LBL}Context:${C_RST} ${zone}[${bar}]${C_RST} ${tokens_k}k/${win_label} (${zone}${pct_int}%${C_RST})"; }
+  seg_context() {
+    [ "$ctx_ok" = 1 ] || return 0
+    printf '%s' "${C_LBL}Context:${C_RST} ${zone}[${bar}]${C_RST} ${tokens_k}k/${win_label} (${zone}${pct_int}%${C_RST})"
+  }
   seg_branch()  { [ -n "$branch" ] && printf '%s' "${C_YLW}⎇ ${branch}${C_RST}(${C_GRN}+${lines_add}${C_RST},${C_RED}-${lines_del}${C_RST})"; }
   seg_session() {
-    [ "${five_pct:-null}" = "null" ] && return 0
-    local s; s=$(awk -v v="$five_pct" 'BEGIN{printf "%.1f", v+0}')
+    [ "${sess_pct:-null}" = "null" ] && return 0
+    local s; s=$(awk -v v="$sess_pct" 'BEGIN{printf "%.1f", v+0}')
     printf '%s' "${C_BLU}Session:${C_RST} ${s}%"
-    [ "${five_reset:-null}" != "null" ] && printf '%s' "${SEP}${C_BLU}Reset:${C_RST} $(fmt_reset "$five_reset")"
+    [ "${sess_reset:-null}" != "null" ] && printf '%s' "${SEP}${C_BLU}Reset:${C_RST} $(fmt_reset "$sess_reset")"
   }
   seg_weekly() {
-    [ "${seven_pct:-null}" = "null" ] && return 0
-    local s; s=$(awk -v v="$seven_pct" 'BEGIN{printf "%.1f", v+0}')
+    [ "${week_pct:-null}" = "null" ] && return 0
+    local s; s=$(awk -v v="$week_pct" 'BEGIN{printf "%.1f", v+0}')
     printf '%s' "${C_BLU}Weekly:${C_RST} ${s}%"
-    [ "${seven_reset:-null}" != "null" ] && printf '%s' "${SEP}${C_BLU}Weekly Reset:${C_RST} $(fmt_reset "$seven_reset")"
+    [ "${week_reset:-null}" != "null" ] && printf '%s' "${SEP}${C_BLU}Weekly Reset:${C_RST} $(fmt_reset "$week_reset")"
   }
   seg_cost() {
     case "${cost_usd:-null}" in null|''|*[!0-9.]*) return 0 ;; esac
@@ -319,18 +313,20 @@ except Exception:
   local prev_announced
   prev_announced=$(grep -oE '"announced":[[:space:]]*[0-9]+' "$state_dir/$session_id.json" 2>/dev/null | grep -oE '[0-9]+' | head -1)
   [ -z "${prev_announced:-}" ] && prev_announced=0
+  # state_version: 2 — признак новой схемы: только такое состояние guard
+  # считает окном статус-строки; состояние v1.10.0 без поля — догадка (QA 2.0.0, N2).
 
   if [ "$has_jq" = 1 ]; then
     jq -n --argjson pct "$pct_int" --argjson window "$window_raw" \
           --argjson input_tokens "$tokens_int" --argjson updated "$now" \
           --argjson announced "$prev_announced" \
-      '{pct: $pct, window: $window, input_tokens: $input_tokens, updated: $updated, announced: $announced}' \
+      '{pct: $pct, window: $window, input_tokens: $input_tokens, updated: $updated, announced: $announced, state_version: 2}' \
       > "$tmp" 2>/dev/null
   else
     python3 -c '
 import json, sys
 pct, window, tok, upd, ann = sys.argv[1:6]
-print(json.dumps({"pct": int(pct), "window": int(window), "input_tokens": int(tok), "updated": int(upd), "announced": int(ann)}))
+print(json.dumps({"pct": int(pct), "window": int(window), "input_tokens": int(tok), "updated": int(upd), "announced": int(ann), "state_version": 2}))
 ' "$pct_int" "$window_raw" "$tokens_int" "$now" "$prev_announced" > "$tmp" 2>/dev/null
   fi
 

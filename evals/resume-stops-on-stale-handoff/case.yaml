@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: resume-stops-on-stale-handoff
+context:
+  scaffold_script: scaffold.sh

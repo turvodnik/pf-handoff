@@ -1,6 +1,6 @@
 ---
 status: active
-session_id: —
+session_id: —   # 8 знаков из строки «Сессия: …» хука старта; нет хука — «—»
 task: —
 updated: <YYYY-MM-DD HH:MM>
 ---

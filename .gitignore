@@ -1,1 +1,4 @@
 .DS_Store
+.agents/runtime/out/
+# claude plugin eval output (aggregate-result.json, report.html) — regenerable (T-143)
+evals/results/

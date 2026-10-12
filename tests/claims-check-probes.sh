@@ -212,13 +212,16 @@ check "протухшая + ~ (канонизация не воскрешает)
 echo
 echo "-- регресс кругов 1-4: «не смог проверить» обязано быть громким --"
 claims "_tools/a + _tools/b · T-000 · кто · взято 2026-01-01 00:00 · истекает $FUTURE"
-check "составная область (круг 1)"         ВНИМАНИЕ "$TOOLS/b"
+# Фикс-раунд 1 T-156: составная разворачивается — вторая половина занята.
+check "составная область (круг 1)"         ЗАНЯТО   "$TOOLS/b"
 claims "_tools/AGENTS.md·T-000·кто·взято 2026-01-01 00:00·истекает $FUTURE"
 check "разделитель без пробелов (круг 1)"  ВНИМАНИЕ "$TOOLS/AGENTS.md"
 claims "_tools/AGENTS.md · T-000 · кто · взято 14.08.2026 20:55 · истекает 14.08.2026 20:55"
 check "дата в чужом формате (круг 2)"      ВНИМАНИЕ "$TOOLS/AGENTS.md"
+# T-156: проверка читает весь файл — живая строка под любым заголовком занята;
+# пропавшая секция по-прежнему громкая (ЗАНЯТО + «не найдена», раньше — только ВНИМАНИЕ).
 { printf '# фикстура\n\n## Текущие держания\n\n_tools/AGENTS.md · T-000 · кто · взято 2026-01-01 00:00 · истекает %s\n' "$FUTURE"; } | w "$CLAIMS"
-check "переименованная секция (круг 2)"    ВНИМАНИЕ "$TOOLS/AGENTS.md"
+checkc "переименованная секция (круг 2)"    ЗАНЯТО "$PROJ" "$TOOLS/AGENTS.md" "не найдена"
 printf '' | w "$CLAIMS"
 check "пустой файл"                        ВНИМАНИЕ "$TOOLS/AGENTS.md"
 claims ""
@@ -232,10 +235,11 @@ printf '# ф\n\n## Живые заявки\n\n_tools/AGENTS.md · T-000 · кт�
 check "CRLF не прячет живую заявку"        ЗАНЯТО "$TOOLS/AGENTS.md"
 printf '# ф\n\n## Живые заявки\n\n_tools/AGENTS.md · T-000 · кто · взято 2026-01-01 00:00 · истекает %s\r\n' "$PAST" | w "$CLAIMS"
 check "CRLF + протухшая → свободна"        СВОБОДНО "$TOOLS/AGENTS.md"
-# 💭 закрывающего гейта: похожий заголовок — не живая секция; календарно
-# невозможная дата — не живой срок; пустая область — не «занято на всё».
+# 💭 закрывающего гейта: похожий заголовок — не живая секция (громко: «не найдена»),
+# но живая строка под ним занята (T-156); календарно невозможная дата — не живой
+# срок; пустая область — не «занято на всё».
 { printf '# ф\n\n## Живые заявки (архив)\n\n_tools/AGENTS.md · T-000 · кто · взято 2026-01-01 00:00 · истекает %s\n' "$FUTURE"; } | w "$CLAIMS"
-check "секция «## Живые заявки (архив)» — не живая" ВНИМАНИЕ "$TOOLS/AGENTS.md"
+checkc "«## Живые заявки (архив)» — не секция, строка жива" ЗАНЯТО "$PROJ" "$TOOLS/AGENTS.md" "не найдена"
 claims "_tools/AGENTS.md · T-000 · кто · взято 2026-01-01 00:00 · истекает 2026-13-40 25:61"
 check "календарно невозможный срок"        ВНИМАНИЕ "$TOOLS/AGENTS.md"
 claims " · T-000 · кто · взято 2026-01-01 00:00 · истекает $FUTURE"
@@ -243,7 +247,7 @@ check "пустая область в строке заявки"      ВНИМА
 claims "просто строка прозы внутри секции"
 check "проза внутри секции"                ВНИМАНИЕ "$TOOLS/AGENTS.md"
 { printf '# ф\n\n## Живые заявки\n\n## Архив\n\n_tools/AGENTS.md · T-000 · кто · взято 2026-01-01 00:00 · истекает %s\n' "$FUTURE"; } | w "$CLAIMS"
-check "живая строка ниже, под ## Архив"    СВОБОДНО "$TOOLS/AGENTS.md"
+check "живая строка ниже, под ## Архив (T-156)" ЗАНЯТО "$TOOLS/AGENTS.md"
 claims "_tools/AGENTS.md · T-000 · кто · взято 2026-01-01 00:00 · истекает $FUTURE"
 chmod 000 "$CLAIMS"
 check "нечитаемый файл при живой заявке"   ВНИМАНИЕ "$TOOLS/AGENTS.md"
@@ -381,6 +385,278 @@ if [ $rc -eq 2 ] && [ ! -e "$BOGUS/.agents" ]; then
 else
     fail=$((fail+1)); printf '  ❌ %-52s → rc=%s, .agents/ существует=%s\n' "лог: не создаёт каталог" "$rc" "$([ -e "$BOGUS/.agents" ] && echo да || echo нет)"
 fi
+
+echo
+echo "-- sid: заявка = сессия (T-122, I-066) --"
+
+# checkx <имя> <ожидаемое> <обязательная подстрока> <аргументы скрипта…>
+# Как check, но принимает флаги (--sid, --sweep) и требует подстроку в выводе:
+# «СВОБОДНО (своя)» и «СВОБОДНО» дают один код 0, различить их может только
+# текст.
+checkx() {
+    local name="$1" want="$2" also="$3"; shift 3
+    local out rc state
+    out="$(bash "$SCRIPT" "$@" 2>&1)"; rc=$?
+    case "$rc" in
+        0) state="СВОБОДНО" ;;
+        1) state="ЗАНЯТО" ;;
+        2) state="ВНИМАНИЕ" ;;
+        *) state="rc=$rc" ;;
+    esac
+    if [ "$state" = "$want" ] && printf '%s' "$out" | grep -q "$want" \
+       && printf '%s' "$out" | grep -qF -- "$also"; then
+        pass=$((pass + 1)); printf '  ✅ %-52s → %s\n' "$name" "$state"
+    else
+        fail=$((fail + 1))
+        printf '  ❌ %-52s → ожидалось %s + «%s», получено %s\n' "$name" "$want" "$also" "$state"
+        printf '     вывод: %s\n' "$(printf '%s' "$out" | head -2)"
+    fi
+}
+
+SID_A="1a2b3c4d"; SID_B="deadbeef"
+claims "_tools/AGENTS.md · T-000 · claude (pf-executor) sid:$SID_A · взято 2026-01-01 00:00 · истекает $FUTURE"
+# Своего sid у проверяющего нет — строка с sid чужая по определению (старое
+# поведение: любое живое пересечение занято).
+checkx "sid в строке, у проверяющего sid нет" ЗАНЯТО "ЗАНЯТО: _tools/AGENTS.md" "$TOOLS/AGENTS.md"
+checkx "тот же sid через --sid" СВОБОДНО "СВОБОДНО (своя): _tools/AGENTS.md" --sid "$SID_A" "$TOOLS/AGENTS.md"
+out="$(CLAIMS_SID="$SID_A" bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qF "СВОБОДНО (своя)"; then
+    pass=$((pass+1)); printf '  ✅ %-52s → СВОБОДНО (своя)\n' "тот же sid через CLAIMS_SID"
+else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "тот же sid через CLAIMS_SID" "$rc" "$(printf '%s' "$out" | head -1)"; fi
+checkx "другой sid → чужая" ЗАНЯТО "ЗАНЯТО: _tools/AGENTS.md" --sid "$SID_B" "$TOOLS/AGENTS.md"
+# Флаг важнее переменной: --sid чужой поверх CLAIMS_SID своего — заявка чужая.
+out="$(CLAIMS_SID="$SID_A" bash "$SCRIPT" --sid "$SID_B" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
+if [ $rc -eq 1 ]; then pass=$((pass+1)); printf '  ✅ %-52s → ЗАНЯТО\n' "--sid перекрывает CLAIMS_SID"
+else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "--sid перекрывает CLAIMS_SID" "$rc" "$(printf '%s' "$out" | head -1)"; fi
+# Свой sid не по форме — ВНИМАНИЕ, а не «чужая» и не «своя» наугад.
+checkx "свой sid не по форме (XYZ)" ВНИМАНИЕ "не по форме" --sid XYZ "$TOOLS/AGENTS.md"
+checkx "свой sid 7 знаков" ВНИМАНИЕ "не по форме" --sid 1a2b3c4 "$TOOLS/AGENTS.md"
+checkx "свой sid верхний регистр" ВНИМАНИЕ "не по форме" --sid 1A2B3C4D "$TOOLS/AGENTS.md"
+checkx "свой sid пустой (--sid \"\")" ВНИМАНИЕ "не по форме" --sid "" "$TOOLS/AGENTS.md"
+out="$(CLAIMS_SID=" " bash "$SCRIPT" "$TOOLS/AGENTS.md" 2>&1)"; rc=$?
+if [ $rc -eq 2 ] && printf '%s' "$out" | grep -q "CLAIMS_SID"; then pass=$((pass+1)); printf '  ✅ %-52s → ВНИМАНИЕ\n' "CLAIMS_SID из пробела"
+else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "CLAIMS_SID из пробела" "$rc" "$(printf '%s' "$out" | head -1)"; fi
+# sid в СТРОКЕ не по форме — строка битая, как «срок не разобран»: даже при
+# совпадении «по буквам» (XYZ = XYZ) своей она не станет.
+claims "_tools/AGENTS.md · T-000 · claude sid:XYZ · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "sid в строке не по форме" ВНИМАНИЕ "не по форме" "$TOOLS/AGENTS.md"
+claims "_tools/AGENTS.md · T-000 · claude sid:1A2B3C4D · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "sid в строке верхний регистр" ВНИМАНИЕ "не по форме" --sid 1a2b3c4d "$TOOLS/AGENTS.md"
+# Старый корпус: строка без sid проходит как раньше — и с заданным своим sid
+# она чужая (нет sid ≠ мой sid).
+claims "_tools/AGENTS.md · T-000 · другая сессия · взято 2026-01-01 00:00 · истекает $FUTURE"
+check  "строка без sid, проверяющий без sid (старый корпус)" ЗАНЯТО "$TOOLS/AGENTS.md"
+checkx "строка без sid при своём --sid → чужая" ЗАНЯТО "ЗАНЯТО: _tools/AGENTS.md" --sid "$SID_A" "$TOOLS/AGENTS.md"
+# Своя заявка рядом с чужой на тот же путь: чужая побеждает (код 1), но
+# своя всё равно названа — обе строки в выводе.
+claims "_tools/AGENTS.md · T-000 · claude sid:$SID_A · взято 2026-01-01 00:00 · истекает $FUTURE" \
+       "_tools/AGENTS.md · T-001 · claude sid:$SID_B · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "своя + чужая на один путь → ЗАНЯТО, своя названа" ЗАНЯТО "СВОБОДНО (своя)" --sid "$SID_A" "$TOOLS/AGENTS.md"
+# Неизвестный флаг и --yes без --sweep — громко, не «свободно».
+checkx "неизвестный флаг --foo" ВНИМАНИЕ "неизвестный аргумент" --foo "$TOOLS/AGENTS.md"
+checkx "--yes без --sweep" ВНИМАНИЕ "--yes" --yes "$TOOLS/AGENTS.md"
+
+echo
+echo "-- живая проверка читает строку как свип: маркер списка «- », поле СНЯТА (финал 19.09) --"
+# Живая секция в реальном файле ведётся списком (`- <scope> · …`); до правки
+# живая проверка брала «- optimize/SPEC.md» как путь и молча отвечала
+# СВОБОДНО поверх живой заявки, которую свип видел. Разбор теперь один на оба.
+SID_C="cccccccc"
+claims "- optimize/SPEC.md · T-998 · claude sid:$SID_C · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "маркер «- », проверяющий без sid → ЗАНЯТО" ЗАНЯТО "ЗАНЯТО: - optimize/SPEC.md" "$PROJ/optimize/SPEC.md"
+checkx "маркер «- », чужой sid → ЗАНЯТО" ЗАНЯТО "ЗАНЯТО: - optimize/SPEC.md" --sid "$SID_B" "$PROJ/optimize/SPEC.md"
+checkx "маркер «- », свой sid → СВОБОДНО (своя)" СВОБОДНО "СВОБОДНО (своя): - optimize/SPEC.md" --sid "$SID_C" "$PROJ/optimize/SPEC.md"
+# Поле СНЯТА после пятого: заявка снята руками — свободна и для живой проверки
+# (раньше — ЗАНЯТО; свип такую строку и так не считал протухшей).
+claims "_tools/AGENTS.md · T-000 · claude sid:$SID_A · взято 2026-01-01 00:00 · истекает $FUTURE · СНЯТА 2026-01-01 01:00"
+checkx "поле СНЯТА → СВОБОДНО" СВОБОДНО "живых заявок" "$TOOLS/AGENTS.md"
+claims "- _tools/AGENTS.md · T-000 · claude · взято 2026-01-01 00:00 · истекает $FUTURE · СНЯТО 2026-01-01 01:00 — main abc1234"
+checkx "маркер + поле СНЯТО → СВОБОДНО" СВОБОДНО "живых заявок" "$TOOLS/AGENTS.md"
+# Негативный контроль: маркер без остальных полей — не заявка, ВНИМАНИЕ, не «свободно».
+claims "- _tools/AGENTS.md"
+checkx "маркер без полей → ВНИМАНИЕ" ВНИМАНИЕ "не разобрана" "$TOOLS/AGENTS.md"
+# Контроль: строка с маркером и живой датой — по-прежнему ЗАНЯТО без sid у обоих.
+claims "- _tools/AGENTS.md · T-000 · другая сессия · взято 2026-01-01 00:00 · истекает $FUTURE"
+check  "маркер «- », старый корпус без sid → ЗАНЯТО" ЗАНЯТО "$TOOLS/AGENTS.md"
+
+echo
+echo "-- весь файл: чужие «## », составные области, срок с хвостом (T-156, Н1 аудита 02.10) --"
+# Claude дописывает заявки в конец файла (`>>`) под чужие заголовки сессий; до
+# T-156 проверка читала только «## Живые заявки» и отвечала СВОБОДНО над живой
+# заявкой. Под чужим заголовком заявкой считается строка с пятым полем
+# «истекает …», проза там молчит; шапка до первого «## » — примеры формата.
+# claims_below <строки…> — пустая живая секция, ниже чужой заголовок с прозой.
+claims_below() {
+    { printf '# фикстура\n\nПример в шапке: _tools/AGENTS.md · T · кто · взято 2026-01-01 00:00 · истекает %s\n\n## Живые заявки\n\n' "$FUTURE"
+      printf '## Сессия такая-то · claude · 2026-10-02\n\nПроза · с · разделителями · но · без срока\n'
+      for line in "$@"; do printf '%s\n' "$line"; done
+    } | w "$CLAIMS"
+}
+claims_below "optimize/ниже · T-900 · claude sid:$SID_A · взято 2026-01-01 00:00 · истекает $FUTURE"
+check  "под чужим заголовком, без sid → ЗАНЯТО"        ЗАНЯТО "$PROJ/optimize/ниже/файл.md"
+checkx "под чужим заголовком, чужой sid → ЗАНЯТО"       ЗАНЯТО "ЗАНЯТО: optimize/ниже" --sid "$SID_B" "$PROJ/optimize/ниже"
+checkx "под чужим заголовком, свой sid → СВОБОДНО (своя)" СВОБОДНО "СВОБОДНО (своя): optimize/ниже" --sid "$SID_A" "$PROJ/optimize/ниже"
+check  "шапка с живым сроком и проза под «## » молчат"  СВОБОДНО "$TOOLS/AGENTS.md"
+# Составная область: скобки читались как буквальное имя, «{SPEC.md,AUDIT.md}» не
+# защищал SPEC.md (аудит 6). Фикс-раунд 1: составная разворачивается в перечень
+# путей (« + », хвост «(…)», {a,b} как в shell, «a, b», глоб → каталог), каждый
+# проверяется отдельно; ВНИМАНИЕ — только если скобки не сходятся.
+claims "optimize/{SPEC.md,AUDIT.md} · T-901 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "{…} в живой секции → ЗАНЯТО"                   ЗАНЯТО "ЗАНЯТО: optimize/{SPEC.md" "$PROJ/optimize/SPEC.md"
+check  "{…} без пересечения → СВОБОДНО"                СВОБОДНО "$PROJ/optimize/README.md"
+claims_below "optimize/{SPEC.md,AUDIT.md} · T-901 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "{…} под чужим заголовком → ЗАНЯТО"             ЗАНЯТО "ЗАНЯТО: optimize/{SPEC.md" "$PROJ/optimize/SPEC.md"
+claims_below "_tools/a + _tools/b · T-902 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "« + » под чужим заголовком → ЗАНЯТО"           ЗАНЯТО "ЗАНЯТО: _tools/a + _tools/b" "$TOOLS/b"
+claims_below "optimize/вл/{a/{x.md,y.md},b.md} · T-909 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+check  "вложенные {…{…}} → ЗАНЯТО"                     ЗАНЯТО "$PROJ/optimize/вл/a/y.md"
+claims_below "optimize/спис/a.md, optimize/спис/b.md · T-910 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+check  "список «a, b» → ЗАНЯТО по второму"             ЗАНЯТО "$PROJ/optimize/спис/b.md"
+claims_below "optimize/вет/y.md (ветка wt-1) · T-911 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+check  "хвост «(ветка …)» → ЗАНЯТО"                    ЗАНЯТО "$PROJ/optimize/вет/y.md"
+claims_below "optimize/глоб/отчёт-* · T-912 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+check  "глоб → свой каталог ЗАНЯТ"                     ЗАНЯТО "$PROJ/optimize/глоб/отчёт-1.md"
+claims_below "optimize/скоб/{a.md,b.md · T-913 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "незакрытая скобка → ВНИМАНИЕ"                  ВНИМАНИЕ "не разобрана" "$PROJ/optimize/другое"
+# sid в скобках пометки «(… sid:1a2b3c4d)» — хвостовая «)» не часть токена.
+claims_below "optimize/зонт · T-914 · claude (оркестратор sid:$SID_A) · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "«sid:…)» в скобках → СВОБОДНО (своя)"          СВОБОДНО "СВОБОДНО (своя)" --sid "$SID_A" "$PROJ/optimize/зонт"
+# Битый sid у непересекающейся строки ничего не решает — молчит; у
+# пересёкшейся — ВНИМАНИЕ (пробы T-122 выше).
+claims_below "optimize/кодекс · T-915 · codex sid:campaign-release-manager · взято 2026-01-01 00:00 · истекает $FUTURE"
+check  "битый sid без пересечения → СВОБОДНО"          СВОБОДНО "$PROJ/optimize/другое"
+checkx "битый sid с пересечением → ВНИМАНИЕ"           ВНИМАНИЕ "не по форме" "$PROJ/optimize/кодекс"
+# Истёкшая и снятая строки не живые — и составные тоже молчат (иначе сотни старых
+# строк реального файла держали бы ВНИМАНИЕ вечно).
+claims "_tools/a + _tools/b · T-902 · claude · взято 2020-01-01 00:00 · истекает $PAST"
+check  "составная, но истёкшая → СВОБОДНО"             СВОБОДНО "$TOOLS/b"
+claims_below "optimize/{SPEC.md,AUDIT.md} · T-901 · claude · взято 2026-01-01 00:00 · истекает $FUTURE · СНЯТА 2026-01-01 01:00"
+check  "составная, но снятая → СВОБОДНО"               СВОБОДНО "$PROJ/optimize/SPEC.md"
+claims_below "optimize/снята · T-903 · claude · взято 2026-01-01 00:00 · истекает $FUTURE · СНЯТА 2026-01-01 01:00" \
+             "optimize/истекла · T-904 · claude · взято 2020-01-01 00:00 · истекает $PAST"
+check  "снятая под чужим заголовком → СВОБОДНО"        СВОБОДНО "$PROJ/optimize/снята"
+check  "истёкшая под чужим заголовком → СВОБОДНО"      СВОБОДНО "$PROJ/optimize/истекла"
+# Срок с хвостом (Codex пишет пояс: «… 18:15 WEST», «истекает: …») или без времени.
+# Пояс сдвигает срок не больше чем на 26 ч, поэтому такая строка молчит, только
+# если срок прошёл больше 26 ч назад; иначе — ВНИМАНИЕ, а не тихое «свободно».
+RECENT="$(python3 -c 'from datetime import datetime,timedelta; print((datetime.now()-timedelta(hours=2)).strftime("%Y-%m-%d %H:%M"))')"
+claims_below "optimize/пояс-давно · T-905 · codex sid:$SID_B · взято: 2020-01-01 00:00 WEST · истекает: 2020-01-01 02:00 WEST"
+check  "срок с поясом, истёк давно → молчит"            СВОБОДНО "$PROJ/optimize/пояс-давно"
+claims_below "optimize/пояс-живой · T-906 · codex sid:$SID_B · взято 2026-01-01 00:00 WEST · истекает $FUTURE WEST"
+checkx "срок с поясом, не истёк → ВНИМАНИЕ"            ВНИМАНИЕ "срок не разобран" "$PROJ/optimize/другое"
+claims_below "optimize/пояс-недавно · T-907 · codex · взято $RECENT UTC · истекает $RECENT UTC"
+checkx "срок с поясом, истёк < 26 ч назад → ВНИМАНИЕ"  ВНИМАНИЕ "срок не разобран" "$PROJ/optimize/другое"
+claims "_tools/старьё · T-908 · codex · взято 2020-01-01 · истекает 2020-01-01"
+check  "живая секция: давний срок без времени → молчит" СВОБОДНО "$TOOLS/AGENTS.md"
+# Codex-препасс T-156, P2: под чужим заголовком «истекает» не на своём месте
+# (пропущено поле задачи) — битая заявка, громко; давняя или снятая — молчит.
+# Строка вовсе без «истекает» — проза (её держит claims_below выше).
+claims_below "optimize/кривая · claude sid:$SID_B · взято 2026-01-01 00:00 · истекает $FUTURE"
+checkx "под заголовком: «истекает» не на месте → ВНИМАНИЕ" ВНИМАНИЕ "не разобрана" "$PROJ/optimize/другое"
+claims_below "optimize/кривая · claude · взято 2020-01-01 00:00 · истекает 2020-01-01 02:00" \
+             "optimize/кривая/2 · claude · СНЯТА 2026-01-01 01:00 · истекает $FUTURE"
+check  "под заголовком: кривая, но давняя или снятая → молчит" СВОБОДНО "$PROJ/optimize/кривая"
+# «истекает» в прозе без даты не протухнет никогда — не заявка, молчит (💭4).
+claims_below "- заявка истекает после ревью, сниму сам"
+check  "проза «истекает» без даты → молчит"            СВОБОДНО "$PROJ/optimize/кривая"
+
+echo
+echo "-- --sweep: протухшие по всему файлу (T-122, I-067) --"
+
+# Фикстура повторяет устройство ЖИВОГО файла: шапка, живая секция с одной
+# живой строкой, затем чужой «## »-заголовок с прозой И строками формата
+# заявки под ним (по парсеру живой секции — история; именно там висели G-A4
+# и T-139 три ретро подряд), строка списком `- `, уже снятая строка.
+ARCHIVE="$TOOLS/.agents/runtime/claims-archive.md"
+rm -f "$ARCHIVE"
+{ printf '# фикстура\n\nПример формата в шапке: a/b · T · кто · взято 2020-01-01 00:00 · истекает %s\n\n## Живые заявки\n' "$PAST"
+  printf '%s\n' "_tools/AGENTS.md · T-000 · claude sid:$SID_A · взято 2026-01-01 00:00 · истекает $FUTURE"
+  printf '%s\n' "_tools/живая-но-протухла · T-001 · claude · взято 2020-01-01 00:00 · истекает $PAST"
+  printf '\n## Автопилот такой-то · claude · 2026-09-11\n'
+  printf 'Проза: области, дословная команда, статус.\n'
+  printf '%s\n' "optimize/под-заголовком-1 · гейт · claude (pf-reviewer) · взято 2020-01-01 00:00 · истекает $PAST"
+  printf '%s\n' "optimize/под-заголовком-2 · гейт · claude (pf-reviewer) · взято 2020-01-01 00:00 · истекает $PAST"
+  printf '%s\n' "- optimize/списком · автопилот · claude · взято 2020-01-01 00:00 · истекает $PAST"
+  printf '%s\n' "optimize/уже-снята · аудит · grok · взято 2020-01-01 00:00 · истекает $PAST · СНЯТО 2020-01-02 00:00"
+  printf '%s\n' "optimize/живая-под-заголовком · T-002 · claude · взято 2026-01-01 00:00 · истекает $FUTURE"
+} | w "$CLAIMS"
+before="$(shasum -a 256 "$CLAIMS" | cut -d' ' -f1)"
+out="$(bash "$SCRIPT" --sweep 2>&1)"; rc=$?
+after="$(shasum -a 256 "$CLAIMS" | cut -d' ' -f1)"
+n="$(printf '%s' "$out" | sed -n 's/^протухших: //p')"
+if [ $rc -eq 0 ] && [ "$n" = 4 ] && [ "$before" = "$after" ] && [ ! -e "$ARCHIVE" ] \
+   && [ "$(printf '%s\n' "$out" | grep -c '^ПРОТУХЛА ')" = 4 ] \
+   && printf '%s' "$out" | grep -q "^ПРОТУХЛА $PAST: optimize/под-заголовком-2" \
+   && printf '%s' "$out" | grep -q "^ПРОТУХЛА $PAST: - optimize/списком" \
+   && ! printf '%s' "$out" | grep -q "уже-снята" \
+   && ! printf '%s' "$out" | grep -q "Пример формата в шапке" \
+   && printf '%s' "$out" | grep -q "^снятых руками и истёкших: 1 "; then
+    pass=$((pass+1)); printf '  ✅ %-52s → протухших: 4, шапка мимо, снятых: 1\n' "--sweep: отчёт, весь файл, снятые мимо"
+else
+    fail=$((fail+1)); printf '  ❌ %-52s → rc=%s, протухших=%s, хеш %s\n' "--sweep: отчёт" "$rc" "$n" "$([ "$before" = "$after" ] && echo тот же || echo ИЗМЕНИЛСЯ)"
+    printf '     вывод: %s\n' "$(printf '%s' "$out" | head -3)"
+fi
+# T-156: живая проверка читает весь файл, как свип: протухшие и снятые строки
+# молчат, живая строка под чужим «## » занимает (до T-156 — СВОБОДНО, Н1 аудита 02.10).
+checkx "после --sweep: своя в секции, чужие пути не мешают" СВОБОДНО "СВОБОДНО (своя)" --sid "$SID_A" "$TOOLS/AGENTS.md"
+check  "живая под чужим заголовком занимает (T-156)" ЗАНЯТО "$PROJ/optimize/живая-под-заголовком"
+# --sweep с областью — ВНИМАНИЕ (свип не проверка области).
+checkx "--sweep с областью" ВНИМАНИЕ "не принимает область" --sweep "$TOOLS/AGENTS.md"
+# --sweep --yes: 4 строки в архив с пометкой «протухла», в файле их 0,
+# живые (в секции и под заголовком) и снятая — на месте, заголовки и проза целы.
+out="$(bash "$SCRIPT" --sweep --yes 2>&1)"; rc=$?
+after_yes="$(shasum -a 256 "$CLAIMS" | cut -d' ' -f1)"
+arch_n="$(grep -c " · протухла [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\} [0-9]\{2\}:[0-9]\{2\}$" "$ARCHIVE" 2>/dev/null)"
+left_n="$(grep "истекает $PAST$" "$CLAIMS" | grep -vc "Пример формата в шапке")"   # шапка остаётся
+if [ $rc -eq 0 ] && [ "$arch_n" = 4 ] && [ "$left_n" = 0 ] && [ "$before" != "$after_yes" ] \
+   && grep -q "^## Архив протухших$" "$ARCHIVE" \
+   && grep -q "^- optimize/списком .* · протухла " "$ARCHIVE" \
+   && grep -q "^## Автопилот такой-то" "$CLAIMS" && grep -q "^Проза:" "$CLAIMS" \
+   && grep -q "уже-снята" "$CLAIMS" && grep -q "живая-под-заголовком" "$CLAIMS" \
+   && grep -q "sid:$SID_A" "$CLAIMS" && grep -q "^Пример формата в шапке" "$CLAIMS"; then
+    pass=$((pass+1)); printf '  ✅ %-52s → 4 в архив с «протухла», в файле 0\n' "--sweep --yes: перенос"
+else
+    fail=$((fail+1)); printf '  ❌ %-52s → rc=%s, в архиве=%s, осталось=%s\n' "--sweep --yes: перенос" "$rc" "${arch_n:-нет}" "$left_n"
+    printf '     вывод: %s\n' "$(printf '%s' "$out" | head -3)"
+fi
+# Строка СВИП в логе событий — ровно одна на перенос (🟡-1 гейта).
+if [ "$(grep -c ' · СВИП: перенесено 4 в claims-archive.md · ' "$CLAIMS_LOG" 2>/dev/null)" = 1 ]; then
+    pass=$((pass+1)); printf '  ✅ %-52s → 1 строка СВИП\n' "--sweep --yes пишет СВИП в лог событий"
+else fail=$((fail+1)); printf '  ❌ %-52s → строк СВИП: %s\n' "--sweep --yes пишет СВИП" "$(grep -c 'СВИП' "$CLAIMS_LOG" 2>/dev/null)"; fi
+# Упавший прошлый перенос: архив записан, а claims.md — нет (строка в обоих).
+# Следующий --yes НЕ дублирует её в архиве, из claims.md удаляет.
+printf '%s\n' "optimize/под-заголовком-1 · гейт · claude (pf-reviewer) · взято 2020-01-01 00:00 · истекает $PAST" >> "$CLAIMS"
+out="$(bash "$SCRIPT" --sweep --yes 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && [ "$(grep -c '^optimize/под-заголовком-1 ' "$ARCHIVE")" = 1 ] \
+   && ! grep -q "^optimize/под-заголовком-1 " "$CLAIMS" && printf '%s' "$out" | grep -q "только удалены из claims.md: 1"; then
+    pass=$((pass+1)); printf '  ✅ %-52s → в архиве 1, из claims.md удалена\n' "--sweep --yes: дедуп после упавшего переноса"
+else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s, в архиве=%s: %s\n' "дедуп" "$rc" "$(grep -c '^optimize/под-заголовком-1 ' "$ARCHIVE")" "$(printf '%s' "$out" | tail -1)"; fi
+after_yes="$(shasum -a 256 "$CLAIMS" | cut -d' ' -f1)"
+# Повторный --yes: переносить нечего, архив не растёт, файл не меняется.
+arch_before="$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)"
+out="$(bash "$SCRIPT" --sweep --yes 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "^протухших: 0" \
+   && [ "$after_yes" = "$(shasum -a 256 "$CLAIMS" | cut -d' ' -f1)" ] \
+   && [ "$arch_before" = "$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)" ]; then
+    pass=$((pass+1)); printf '  ✅ %-52s → протухших: 0, файлы не тронуты\n' "--sweep --yes повторно (идемпотентность)"
+else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s: %s\n' "--sweep --yes повторно" "$rc" "$(printf '%s' "$out" | head -2)"; fi
+# Второй перенос ДОПИСЫВАЕТ в существующий архив под ту же секцию, не затирает.
+claims "_tools/ещё-протухла · T-003 · claude · взято 2020-01-01 00:00 · истекает $PAST"
+out="$(bash "$SCRIPT" --sweep --yes 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && [ "$(grep -c '^## Архив протухших$' "$ARCHIVE")" = 1 ] \
+   && [ "$(grep -c ' · протухла 20' "$ARCHIVE")" = 5 ] && grep -q "под-заголовком-1" "$ARCHIVE"; then
+    pass=$((pass+1)); printf '  ✅ %-52s → 5 строк, секция одна\n' "--sweep --yes: архив дописывается"
+else fail=$((fail+1)); printf '  ❌ %-52s → rc=%s, секций=%s, строк=%s\n' "архив дописывается" "$rc" "$(grep -c '^## Архив протухших$' "$ARCHIVE")" "$(grep -c ' · протухла 20' "$ARCHIVE")"; fi
+# Свип-отчёт в событийный лог не пишет (hygiene-sweep считает каждую строку
+# проверкой); --yes пишет одну строку СВИП.
+rm -f "$CLAIMS_LOG"
+bash "$SCRIPT" --sweep >/dev/null 2>&1
+if [ ! -e "$CLAIMS_LOG" ] || [ "$(wc -l < "$CLAIMS_LOG" | tr -d ' ')" = 0 ]; then
+    pass=$((pass+1)); printf '  ✅ %-52s → лог пуст\n' "--sweep без --yes не пишет в лог событий"
+else fail=$((fail+1)); printf '  ❌ %-52s → строк в логе: %s\n' "--sweep не пишет в лог" "$(wc -l < "$CLAIMS_LOG" | tr -d ' ')"; fi
+# Файла заявок нет — свипу нечего сканировать, и это ВНИМАНИЕ, не «протухших: 0».
+rm -f "$CLAIMS" "$ARCHIVE"
+checkx "--sweep без файла заявок" ВНИМАНИЕ "файла заявок нет" --sweep
 
 echo
 echo "итого: успешно $pass, провалено $fail"

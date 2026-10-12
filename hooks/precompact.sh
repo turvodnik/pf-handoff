@@ -17,6 +17,10 @@
 # ТОЛЬКО из явной ветки «снимок не записан». Инициировать сжатие хук не может
 # ни при каких настройках — таких полей вывода у хуков нет.
 set -u
+# Дочерний CLI council.sh (PF_COUNCIL_RUN=1): одноразовый процесс, снимок
+# перед сжатием ему не нужен — молчим, вход сливаем, rc 0 (сжатие разрешено;
+# QA 2.0.0, тихий режим).
+if [ "${PF_COUNCIL_RUN:-}" = 1 ]; then cat >/dev/null 2>&1; exit 0; fi
 
 HOOK_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 PF_EFFECTIVE_HOME="${HOME:-${TMPDIR:-/tmp}}"
@@ -41,6 +45,18 @@ run() {
     printf '%s ? ? ? SKIPPED-empty-stdin (no payload — compaction allowed, no snapshot)\n' "$ts" >> "$log_dir/compacts.log"
     return 0
   fi
+
+  # Foreign input (T-166): no `"session_id"` key in the raw payload — not
+  # Claude Code's PreCompact (garbage, Grok's camelCase `sessionId`, another
+  # platform). Not ours to gate: exit 0 with no output and no log line, the
+  # compaction of that platform goes ahead. Recognition is on the RAW text, not
+  # on the parsed value, on purpose: a Claude payload on a machine without jq
+  # and python3 parses to an empty session_id and must still reach the block
+  # below (the stderr text promises exactly that case).
+  case "$input" in
+    *'"session_id"'*) : ;;
+    *) return 0 ;;
+  esac
 
   local has_jq=0
   command -v jq >/dev/null 2>&1 && has_jq=1
@@ -108,8 +124,41 @@ EOF
     printf '%s %s %s %s SKIPPED-subagent (no snapshot by design)\n' "$ts" "${session_id:-?}" "${trigger:-?}" "${cwd_in:-?}" >> "$log_dir/compacts.log"
     return 0
   fi
-  printf '%s %s %s %s OK %s\n' "$ts" "${session_id:-?}" "${trigger:-?}" "${cwd_in:-?}" "$snap" >> "$log_dir/compacts.log"
+  printf '%s %s %s %s OK %s guard announced t2: %s\n' "$ts" "${session_id:-?}" "${trigger:-?}" "${cwd_in:-?}" "$snap" "$(guard_t2_status "$log_dir/${session_id:-?}.json")" >> "$log_dir/compacts.log"
   return 0
+}
+
+# guard_t2_status STATE_FILE — "yes (announced=N)" / "no (announced=N)" /
+# "unknown": did context-guard.sh announce the t2 threshold (and take its
+# snapshot) before this compaction? Measured for the retro (T-111): a
+# compaction whose t2 was never announced means the guard's reading and the
+# harness's disagreed (e.g. the advisor usage spike). t2 follows the guard
+# (T-164, T-166): the second value of CONTEXT_GUARD_THRESHOLDS when it is
+# valid, else 60. The parse is the guard's own, copied as statusline.sh does
+# (the hooks install separately, there is no shared helper to source); a
+# drift here makes this log line lie, not the guard.
+guard_t2_status() {
+  local state_file="$1" ann t2=60
+  [ -f "$state_file" ] && [ -r "$state_file" ] || { printf 'unknown'; return 0; }
+  ann=$(grep -oE '"announced":[[:space:]]*[0-9]+' "$state_file" 2>/dev/null | grep -oE '[0-9]+' | head -1)
+  [ -z "${ann:-}" ] && ann=0
+  if [ -n "${CONTEXT_GUARD_THRESHOLDS:-}" ]; then
+    local c1 c2 c3 cx
+    read -r c1 c2 c3 cx <<< "$CONTEXT_GUARD_THRESHOLDS"
+    if [ -n "${c1:-}" ] && [ -n "${c2:-}" ] && [ -n "${c3:-}" ] && [ -z "${cx:-}" ]; then
+      case "$c1$c2$c3" in
+        *[!0-9]*) : ;;
+        *)
+          if [ "${#c1}" -le 2 ] && [ "${#c2}" -le 2 ] && [ "${#c3}" -le 2 ]; then
+            c1=$((10#$c1)); c2=$((10#$c2)); c3=$((10#$c3))
+            if [ "$c1" -ge 1 ] && [ "$c1" -lt "$c2" ] && [ "$c2" -lt "$c3" ] && [ "$c3" -le 99 ]; then
+              t2="$c2"
+            fi
+          fi ;;
+      esac
+    fi
+  fi
+  if [ "$ann" -ge "$t2" ] 2>/dev/null; then printf 'yes (announced=%s)' "$ann"; else printf 'no (announced=%s)' "$ann"; fi
 }
 
 # stderr намеренно НЕ глушим: на пути блокировки это единственный канал, по
