@@ -28,7 +28,11 @@ PF_EFFECTIVE_HOME="${HOME:-${TMPDIR:-/tmp}}"
 # rc=0 — сжатие разрешено, rc=2 — заблокировано.
 run() {
   local input ts log_dir
-  input=$(cat)
+  # bash >= 4.4 prints "ignored null byte" to stderr when a NUL reaches a
+  # command substitution, and stderr is this hook's block-reason channel: only
+  # this read is muted, so garbage input stays silent (T-194). Not `tr -d`:
+  # BSD tr in a UTF-8 locale stops at an invalid byte and truncates the input.
+  { input=$(cat); } 2>/dev/null
 
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   log_dir="$PF_EFFECTIVE_HOME/.claude/context-state"

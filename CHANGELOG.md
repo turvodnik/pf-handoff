@@ -4,6 +4,12 @@
 
 Semver: breaking changes (HANDOFF file format, state file names, skill contracts, install scheme) = major; new features = minor; fixes = patch.
 
+## [2.0.1] — 2026-10-12
+
+### Fixed
+
+- `precompact.sh` no longer prints `warning: command substitution: ignored null byte in input` to stderr when its input contains a NUL byte under bash 4.4 or newer (Linux). Only the hook's input read is muted, so input that is not a Claude payload passes silently, as documented in 2.0.0. A real Claude payload is handled exactly as before. This warning turned the 2.0.0 test suite red on Linux CI; macOS ships bash 3.2, which drops the byte without a warning.
+
 ## [2.0.0] — 2026-10-12
 
 Major by the semver rule above: the default window thresholds change from 60/80/90 % to 40/60/75 % and the per-project threshold file is no longer read (a configuration contract); `pf-handoff` no longer merges, pushes or deletes a branch when a session closes (a skill contract); the installer keeps a hook or status-line registration that points elsewhere instead of overwriting it (the install scheme).
